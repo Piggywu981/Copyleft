@@ -1,4 +1,4 @@
-# Semi-Utils - PyQt5 GUI版本
+# Semi-Utils - PyQt5 GUI版本 v2.1
 
 ## 项目背景
 
@@ -47,6 +47,11 @@ pip install -r requirements.txt
 ```bash
 python main.py
 ```
+
+### 注意事项
+- 建议使用Python 3.8+版本
+- 如遇到QFluentWidgets安装问题，可以尝试：`pip install PyQt-Fluent-Widgets`
+- 确保系统已安装Microsoft Visual C++ Redistributable
 
 ## 使用说明
 
@@ -133,6 +138,24 @@ python main.py
 - 单个文件处理失败不会影响其他文件
 - 建议检查错误日志进行问题排查
 
+## 已知问题和解决方案
+
+### 1. Qt相关错误
+**问题**：`ImportError: DLL load failed`
+**解决方案**：安装Microsoft Visual C++ Redistributable
+
+### 2. 字体显示问题
+**问题**：界面字体过小
+**解决方案**：程序已优化字体大小，如仍有问题可手动调整配置文件中的`font_size`和`bold_font_size`值
+
+### 3. 布局切换问题
+**问题**：布局切换后配置不保存
+**解决方案**：已修复，确保使用最新版本
+
+### 4. 文字位置显示问题
+**问题**：文字位置显示为null
+**解决方案**：已修复，确保使用最新版本
+
 ## 技术架构
 
 ### 核心模块
@@ -179,13 +202,25 @@ Copyleft/
 
 ## 联系方式
 
-- 原项目作者：leslievan
-- GitHub: @leslievan
-- Bilibili: @吨吨吨的半夏
+### 原项目作者
+- **姓名**：leslievan
+- **GitHub**：@leslievan
+- **Bilibili**：@吨吨吨的半夏
+
+### 本项目作者
+- **姓名**：PiggyWu981
+- **GitHub**：@PiggyWu981
+- **Bilibili**：@PiggyWu981
 
 ## 更新日志
 
-### v2.0 (当前版本)
+### v2.1 (当前版本)
+- 修复布局切换和文字位置设置的bug
+- 优化字体大小显示效果
+- 改进配置管理系统
+- 增强错误处理和稳定性
+
+### v2.0 
 - 完成PyQt5 GUI迁移
 - 实现图形化用户界面
 - 添加多线程处理支持
