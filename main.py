@@ -92,7 +92,7 @@ class ProcessingThread(QThread):
     progress_updated = pyqtSignal(int)
     processing_finished = pyqtSignal()
     error_occurred = pyqtSignal(str)
-    stats_updated = pyqtSignal(int, int, int, float)  # 排队数, 处理中数, 已处理数, 每秒处理数
+    stats_updated = pyqtSignal(int, int, int, float)  # 排队数, 正在处理数, 已处理数, 每秒处理数
     
     def __init__(self, config, input_dir, output_dir):
         super().__init__()
@@ -606,7 +606,7 @@ class MainWindow(FluentWindow):
         
         # 添加到布局
         stats_layout.addRow("排队数:", self.queued_label)
-        stats_layout.addRow("处理中数:", self.processing_label)
+        stats_layout.addRow("正在处理数:", self.processing_label)
         stats_layout.addRow("已处理数:", self.processed_label)
         stats_layout.addRow("每秒处理数:", self.rate_label)
         
