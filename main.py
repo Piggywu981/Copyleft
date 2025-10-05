@@ -7,12 +7,13 @@ import os
 import sys
 import logging
 import traceback
+import time
 from pathlib import Path
 
 from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtWidgets import (QApplication, QVBoxLayout, QHBoxLayout, 
                              QWidget, QGroupBox, QFormLayout, QTextEdit,
-                             QMessageBox, QFileDialog)
+                             QMessageBox, QFileDialog, QLabel)
 
 # 导入PyQt-Fluent-Widgets组件
 from qfluentwidgets import (FluentWindow, setTheme, Theme, setThemeColor,
@@ -35,6 +36,7 @@ class ProcessingThread(QThread):
     progress_updated = pyqtSignal(int)
     processing_finished = pyqtSignal()
     error_occurred = pyqtSignal(str)
+    stats_updated = pyqtSignal(int, int, int, float)  # 排队数, 处理中数, 已处理数, 每秒处理数
     
     def __init__(self, config, input_dir, output_dir):
         super().__init__()
@@ -42,7 +44,8 @@ class ProcessingThread(QThread):
         self.input_dir = input_dir
         self.output_dir = output_dir
         self.processor_chain = ProcessorChain()
-        
+        self.stop_event = False
+    
     def run(self):
         try:
             from core.entity.image_container import ImageContainer
@@ -50,6 +53,11 @@ class ProcessingThread(QThread):
             
             file_list = get_file_list(self.input_dir)
             total_files = len(file_list)
+            queued_count = total_files
+            processing_count = 0
+            processed_count = 0
+            start_time = time.time()
+            processed_files = []
             
             # 构建处理器链
             layout_type = self.config.get_layout_type()
@@ -69,6 +77,22 @@ class ProcessingThread(QThread):
             
             # 处理每个文件
             for i, source_path in enumerate(file_list):
+                if self.stop_event:
+                    break
+                
+                queued_count -= 1
+                processing_count += 1
+                
+                # 计算每秒处理数
+                elapsed_time = time.time() - start_time
+                if elapsed_time > 0:
+                    processing_rate = (processed_count + 1) / elapsed_time if processed_count > 0 else 0
+                else:
+                    processing_rate = 0
+                
+                # 发送统计信息
+                self.stats_updated.emit(queued_count, processing_count, processed_count, processing_rate)
+                
                 container = ImageContainer(source_path)
                 container.is_use_equivalent_focal_length(self.config.use_equivalent_focal_length())
                 
@@ -77,6 +101,8 @@ class ProcessingThread(QThread):
                     target_path = Path(self.output_dir).joinpath(source_path.name)
                     container.save(target_path, quality=self.config.get_quality())
                     container.close()
+                    processed_count += 1
+                    processed_files.append(source_path.name)
                 except Exception as e:
                     error_msg = f"处理文件 {source_path.name} 时出错: {str(e)}"
                     # 在ProcessingThread中获取logger
@@ -84,12 +110,18 @@ class ProcessingThread(QThread):
                     logger = logging.getLogger(__name__)
                     logger.error(error_msg, exc_info=True)
                     self.error_occurred.emit(error_msg)
+                finally:
+                    processing_count -= 1
                 
                 # 更新进度
-                progress = int((i + 1) / total_files * 100)
+                progress = int((processed_count) / total_files * 100)
                 self.progress_updated.emit(progress)
             
-            self.processing_finished.emit()
+            # 最终更新统计信息
+            self.stats_updated.emit(0, 0, processed_count, 0)
+            
+            if not self.stop_event:
+                self.processing_finished.emit()
             
         except Exception as e:
             error_msg = f"处理过程中发生错误: {str(e)}"
@@ -98,6 +130,10 @@ class ProcessingThread(QThread):
             logger = logging.getLogger(__name__)
             logger.error(error_msg, exc_info=True)
             self.error_occurred.emit(error_msg)
+    
+    def stop(self):
+        """停止处理线程"""
+        self.stop_event = True
 
 
 class MainWindow(FluentWindow):
@@ -117,29 +153,32 @@ class MainWindow(FluentWindow):
         # 设置主题颜色
         setThemeColor('#0078D4')  # Microsoft蓝色主题色
         
-        # 创建各个界面
-        self.basic_interface = self.create_basic_interface()
-        self.advanced_interface = self.create_advanced_interface()
-        self.processing_interface = self.create_processing_interface()
+        # 创建单一界面（合并所有功能）
+        self.main_interface = self.create_main_interface()
         
         # 添加界面到导航
-        self.addSubInterface(self.basic_interface, FluentIcon.HOME, "基本设置")
-        self.addSubInterface(self.advanced_interface, FluentIcon.SETTING, "高级设置")
-        self.addSubInterface(self.processing_interface, FluentIcon.PHOTO, "图片处理")
+        self.addSubInterface(self.main_interface, FluentIcon.HOME, "图片处理")
         
         # 设置初始界面
-        self.stackedWidget.setCurrentWidget(self.basic_interface)
-        self.navigationInterface.setCurrentItem(self.basic_interface.objectName())
+        self.stackedWidget.setCurrentWidget(self.main_interface)
+        self.navigationInterface.setCurrentItem(self.main_interface.objectName())
         
-    def create_basic_interface(self):
-        """创建基本设置界面"""
+    def create_main_interface(self):
+        """创建合并后的主界面"""
         interface = QWidget()
-        interface.setObjectName("basicInterface")  # 设置对象名称
-        layout = QVBoxLayout(interface)
+        interface.setObjectName("mainInterface")
+        main_layout = QVBoxLayout(interface)
         
         # 标题
-        title_label = TitleLabel("基本设置")
-        layout.addWidget(title_label)
+        title_label = TitleLabel("图片处理工具")
+        main_layout.addWidget(title_label)
+        
+        # 创建水平布局，左侧设置，右侧处理
+        content_layout = QHBoxLayout()
+        
+        # 左侧设置面板
+        settings_panel = QWidget()
+        settings_layout = QVBoxLayout(settings_panel)
         
         # 布局设置组
         layout_group = QGroupBox("布局设置")
@@ -148,14 +187,12 @@ class MainWindow(FluentWindow):
         # 布局类型选择
         self.layout_combo = ComboBox()
         for item in layout_items_dict.values():
-            # 使用setItemData而不是addItem的第二个参数
             self.layout_combo.addItem(item.name)
             index = self.layout_combo.count() - 1
             self.layout_combo.setItemData(index, item.value)
+        
         # 设置当前布局类型
         current_layout = self.config.get_layout_type()
-        
-        # 手动查找匹配的项，因为findData可能有问题
         found_index = -1
         for i in range(self.layout_combo.count()):
             item_data = self.layout_combo.itemData(i)
@@ -166,13 +203,10 @@ class MainWindow(FluentWindow):
         if found_index >= 0:
             self.layout_combo.setCurrentIndex(found_index)
         else:
-            # 如果当前布局类型不在可用列表中，设置为第一个可用项
             if self.layout_combo.count() > 0:
                 self.layout_combo.setCurrentIndex(0)
-                # 同时更新配置为第一个可用布局类型
                 first_layout_value = self.layout_combo.itemData(0)
                 self.config.set_layout(first_layout_value)
-        self.layout_combo.currentTextChanged.connect(self.on_layout_changed)
         self.layout_combo.currentTextChanged.connect(self.on_layout_changed)
         layout_form.addRow("布局类型:", self.layout_combo)
         
@@ -182,7 +216,7 @@ class MainWindow(FluentWindow):
         self.logo_checkbox.stateChanged.connect(self.on_logo_changed)
         layout_form.addRow(self.logo_checkbox)
         
-        layout.addWidget(layout_group)
+        settings_layout.addWidget(layout_group)
         
         # 文字位置设置组
         text_group = QGroupBox("文字位置设置")
@@ -196,7 +230,6 @@ class MainWindow(FluentWindow):
         
         for pos in positions:
             combo = ComboBox()
-            # 添加所有可选的文字类型
             text_options = [
                 (MODEL_NAME, MODEL_VALUE),
                 (MAKE_NAME, MAKE_VALUE),
@@ -226,10 +259,8 @@ class MainWindow(FluentWindow):
             if index >= 0:
                 combo.setCurrentIndex(index)
             else:
-                # 如果当前值不在可用列表中，设置为第一个可用项
                 if combo.count() > 0:
                     combo.setCurrentIndex(0)
-                    # 同时更新配置为第一个可用值
                     first_value = combo.itemData(0)
                     self.config.set_element_name(pos, first_value)
             
@@ -237,76 +268,49 @@ class MainWindow(FluentWindow):
             self.position_combos[pos] = combo
             text_layout.addRow(f"{position_names[pos]}:", combo)
         
-        layout.addWidget(text_group)
+        settings_layout.addWidget(text_group)
         
-        layout.addStretch(1)
-        return interface
-        
-    def create_advanced_interface(self):
-        """创建高级设置界面"""
-        interface = QWidget()
-        interface.setObjectName("advancedInterface")  # 设置对象名称
-        layout = QVBoxLayout(interface)
-        
-        # 标题
-        title_label = TitleLabel("高级设置")
-        layout.addWidget(title_label)
-        
-        # 效果设置组
-        effects_group = QGroupBox("效果设置")
-        effects_layout = QFormLayout(effects_group)
+        # 高级设置组
+        advanced_group = QGroupBox("高级设置")
+        advanced_layout = QFormLayout(advanced_group)
         
         # 阴影设置
         self.shadow_checkbox = CheckBox("启用阴影")
         self.shadow_checkbox.setChecked(self.config.has_shadow_enabled())
         self.shadow_checkbox.stateChanged.connect(self.on_shadow_changed)
-        effects_layout.addRow(self.shadow_checkbox)
+        advanced_layout.addRow(self.shadow_checkbox)
         
         # 白边设置
         self.margin_checkbox = CheckBox("启用白边")
         self.margin_checkbox.setChecked(self.config.has_white_margin_enabled())
         self.margin_checkbox.stateChanged.connect(self.on_margin_changed)
-        effects_layout.addRow(self.margin_checkbox)
+        advanced_layout.addRow(self.margin_checkbox)
         
         # 按比例填充设置
         self.padding_checkbox = CheckBox("按比例填充")
         self.padding_checkbox.setChecked(self.config.has_padding_with_original_ratio_enabled())
         self.padding_checkbox.stateChanged.connect(self.on_padding_changed)
-        effects_layout.addRow(self.padding_checkbox)
+        advanced_layout.addRow(self.padding_checkbox)
         
         # 等效焦距设置
         self.focal_checkbox = CheckBox("使用等效焦距")
         self.focal_checkbox.setChecked(self.config.use_equivalent_focal_length())
         self.focal_checkbox.stateChanged.connect(self.on_focal_changed)
-        effects_layout.addRow(self.focal_checkbox)
-        
-        layout.addWidget(effects_group)
-        
-        # 质量设置组
-        quality_group = QGroupBox("输出设置")
-        quality_layout = QFormLayout(quality_group)
+        advanced_layout.addRow(self.focal_checkbox)
         
         # 图片质量
         self.quality_spin = SpinBox()
         self.quality_spin.setRange(1, 100)
         self.quality_spin.setValue(self.config.get_quality())
         self.quality_spin.valueChanged.connect(self.on_quality_changed)
-        quality_layout.addRow("图片质量 (1-100):", self.quality_spin)
+        advanced_layout.addRow("图片质量 (1-100):", self.quality_spin)
         
-        layout.addWidget(quality_group)
+        settings_layout.addWidget(advanced_group)
+        settings_layout.addStretch(1)
         
-        layout.addStretch(1)
-        return interface
-        
-    def create_processing_interface(self):
-        """创建处理界面"""
-        interface = QWidget()
-        interface.setObjectName("processingInterface")  # 设置对象名称
-        layout = QVBoxLayout(interface)
-        
-        # 标题
-        title_label = TitleLabel("图片处理")
-        layout.addWidget(title_label)
+        # 右侧处理面板
+        process_panel = QWidget()
+        process_layout = QVBoxLayout(process_panel)
         
         # 文件选择组
         file_group = QGroupBox("文件选择")
@@ -334,7 +338,7 @@ class MainWindow(FluentWindow):
         output_layout.addWidget(output_browse_btn)
         file_layout.addLayout(output_layout)
         
-        layout.addWidget(file_group)
+        process_layout.addWidget(file_group)
         
         # 处理控制组
         control_group = QGroupBox("处理控制")
@@ -350,16 +354,38 @@ class MainWindow(FluentWindow):
         self.process_btn.clicked.connect(self.start_processing)
         control_layout.addWidget(self.process_btn)
         
-        # 日志显示
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(200)
-        control_layout.addWidget(BodyLabel("处理日志:"))
-        control_layout.addWidget(self.log_text)
+        process_layout.addWidget(control_group)
         
-        layout.addWidget(control_group)
+        # 进度统计组
+        stats_group = QGroupBox("处理统计")
+        stats_layout = QFormLayout(stats_group)
+        
+        # 统计标签
+        self.queued_label = QLabel("0")
+        self.processing_label = QLabel("0")
+        self.processed_label = QLabel("0")
+        self.rate_label = QLabel("0.0")
+        
+        # 添加到布局
+        stats_layout.addRow("排队数:", self.queued_label)
+        stats_layout.addRow("处理中数:", self.processing_label)
+        stats_layout.addRow("已处理数:", self.processed_label)
+        stats_layout.addRow("每秒处理数:", self.rate_label)
+        
+        process_layout.addWidget(stats_group)
+        process_layout.addStretch(1)
+        
+        # 设置左右面板比例
+        content_layout.addWidget(settings_panel, 2)  # 左侧占2份
+        content_layout.addWidget(process_panel, 1)    # 右侧占1份
+        
+        main_layout.addLayout(content_layout)
         
         return interface
+        
+    # 保留旧的界面方法引用，用于兼容性
+        
+    # 保留旧的界面方法引用，用于兼容性
         
     def on_layout_changed(self, text):
         """布局类型改变事件"""
@@ -367,16 +393,13 @@ class MainWindow(FluentWindow):
         if index >= 0:
             layout_value = self.layout_combo.itemData(index)
             self.config.set_layout(layout=layout_value)
-            self.log_text.append(f"布局已更改为: {text}")
             
     def on_logo_changed(self, state):
         """Logo设置改变事件"""
         if state == 2:  # Qt.Checked
             self.config.enable_logo()
-            self.log_text.append("Logo已启用")
         else:
             self.config.disable_logo()
-            self.log_text.append("Logo已禁用")
             
     def on_position_changed(self, position, text):
         """文字位置改变事件"""
@@ -386,50 +409,38 @@ class MainWindow(FluentWindow):
             value = combo.itemData(index)
             if value is not None:
                 self.config.set_element_name(location=position, name=value)
-                position_names = {'left_top': '左上角', 'right_top': '右上角', 
-                                 'left_bottom': '左下角', 'right_bottom': '右下角'}
-                self.log_text.append(f"{position_names[position]}文字已设置为: {text}")
             
     def on_shadow_changed(self, state):
         """阴影设置改变事件"""
         if state == 2:
             self.config.enable_shadow()
-            self.log_text.append("阴影效果已启用")
         else:
             self.config.disable_shadow()
-            self.log_text.append("阴影效果已禁用")
             
     def on_margin_changed(self, state):
         """白边设置改变事件"""
         if state == 2:
             self.config.enable_white_margin()
-            self.log_text.append("白边效果已启用")
         else:
             self.config.disable_white_margin()
-            self.log_text.append("白边效果已禁用")
             
     def on_padding_changed(self, state):
         """按比例填充设置改变事件"""
         if state == 2:
             self.config.enable_padding_with_original_ratio()
-            self.log_text.append("按比例填充已启用")
         else:
             self.config.disable_padding_with_original_ratio()
-            self.log_text.append("按比例填充已禁用")
             
     def on_focal_changed(self, state):
         """等效焦距设置改变事件"""
         if state == 2:
             self.config.enable_equivalent_focal_length()
-            self.log_text.append("等效焦距已启用")
         else:
             self.config.disable_equivalent_focal_length()
-            self.log_text.append("等效焦距已禁用")
             
     def on_quality_changed(self, value):
         """图片质量改变事件"""
         self.config.set_quality(value)
-        self.log_text.append(f"图片质量已设置为: {value}")
         
     def browse_input_directory(self):
         """浏览输入目录"""
@@ -464,24 +475,39 @@ class MainWindow(FluentWindow):
         self.process_btn.setEnabled(False)
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
-        self.log_text.append("开始处理图片...")
+        
+        # 重置统计标签
+        self.queued_label.setText("0")
+        self.processing_label.setText("0")
+        self.processed_label.setText("0")
+        self.rate_label.setText("0.0")
         
         # 启动处理线程
         self.processing_thread = ProcessingThread(self.config, input_dir, output_dir)
         self.processing_thread.progress_updated.connect(self.update_progress)
         self.processing_thread.processing_finished.connect(self.processing_finished)
         self.processing_thread.error_occurred.connect(self.processing_error)
+        self.processing_thread.stats_updated.connect(self.update_stats)
         self.processing_thread.start()
         
     def update_progress(self, value):
         """更新进度条"""
         self.progress_bar.setValue(value)
         
+    def update_stats(self, queued, processing, processed, rate):
+        """更新处理统计信息"""
+        self.queued_label.setText(str(queued))
+        self.processing_label.setText(str(processing))
+        self.processed_label.setText(str(processed))
+        self.rate_label.setText(f"{rate:.2f}")
+        
     def processing_finished(self):
         """处理完成"""
         self.process_btn.setEnabled(True)
         self.progress_bar.setVisible(False)
-        self.log_text.append("图片处理完成！")
+        # 确保统计信息显示最终状态
+        from utils import get_file_list
+        self.update_stats(0, 0, int(self.progress_bar.value() * len(get_file_list(self.input_path_edit.text())) / 100), 0)
         QMessageBox.information(self, "完成", "图片处理完成！")
         
     def processing_error(self, error_msg):
@@ -490,7 +516,6 @@ class MainWindow(FluentWindow):
         import logging
         logger = logging.getLogger(__name__)
         logger.error(f"图片处理错误: {error_msg}", exc_info=True)
-        self.log_text.append(f"错误: {error_msg}")
         QMessageBox.warning(self, "错误", error_msg)
         
     def closeEvent(self, event):
