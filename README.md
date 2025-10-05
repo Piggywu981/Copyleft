@@ -1,4 +1,4 @@
-# Semi-Utils - PyQt5 GUI版本 v2.3
+# Semi-Utils - PyQt5 GUI版本 v2.5
 
 ## 项目背景
 
@@ -43,7 +43,13 @@
 pip install -r requirements.txt
 ```
 
-### 2. 运行程序
+### 2. （重要）下载并解压exiftool
+- 从[exiftool官网](https://exiftool.org/)下载最新版本的exiftool
+- 解压到项目根目录下
+- 将解压后的`exiftool(-k).exe`文件复制到项目根目录下
+- 将"exiftool(-k).exe"重命名为"exiftool.exe"
+
+### 3. 运行程序
 ```bash
 python main.py
 ```
@@ -203,23 +209,28 @@ Copyleft/
 ## 联系方式
 
 ### 原项目作者
-- **姓名**：leslievan
-- **GitHub**：@leslievan
-- **Bilibili**：@吨吨吨的半夏
+- **leslievan**
+- **GitHub**：@[leslievan](https://github.com/leslievan)
+- **Bilibili**：@[吨吨吨的半夏](https://space.bilibili.com/13400294)
 
 ### 本项目作者
-- **姓名**：PiggyWu981
-- **GitHub**：@PiggyWu981
-- **Bilibili**：@PiggyWu981
+- **PiggyWu981**
+- **GitHub**：@[PiggyWu981](https://github.com/PiggyWu981)
+- **Bilibili**：@[PiggyWu981](https://space.bilibili.com/355054416)
 
 ## 更新日志
 
-### v2.3 更新日志 (2024-01-16)
+### v2.4 更新日志
+- 添加并行处理功能：支持同时处理最多5张图片，大大提高了程序运行效率
+- 优化资源利用率：使用线程池管理工作线程，充分利用系统资源
+- 改进错误处理机制：单个图片处理失败不会影响整体处理流程
+
+### v2.3 更新日志
 - 添加进度显示功能，包括进度条和详细统计信息
 - 在处理界面右下角新增处理统计区域
 - 显示内容包括：排队数、处理中数、已处理数和每秒处理数
 
-### v2.2 更新日志 (2024-01-16)
+### v2.2 更新日志
 - 简化UI界面，合并三个标签页为一个
 - 删除日志显示，改为错误弹窗提示
 - 优化界面布局，左侧设置，右侧处理

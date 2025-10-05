@@ -8,12 +8,14 @@ import sys
 import logging
 import traceback
 import time
+import queue
 from pathlib import Path
 
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtCore import QThread, QThreadPool, QRunnable, QObject, pyqtSignal, pyqtSlot, Qt
+from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (QApplication, QVBoxLayout, QHBoxLayout, 
                              QWidget, QGroupBox, QFormLayout, QTextEdit,
-                             QMessageBox, QFileDialog, QLabel)
+                             QMessageBox, QFileDialog, QLabel, QSpacerItem, QSizePolicy)
 
 # 导入PyQt-Fluent-Widgets组件
 from qfluentwidgets import (FluentWindow, setTheme, Theme, setThemeColor,
@@ -31,6 +33,60 @@ from init import (WATERMARK_PROCESSOR, WATERMARK_LEFT_LOGO_PROCESSOR,
 from utils import get_file_list
 
 
+class ImageWorker(QRunnable):
+    """图片处理工作线程"""
+    def __init__(self, config, source_path, output_dir, processor_chain):
+        super().__init__()
+        self.config = config
+        self.source_path = source_path
+        self.output_dir = output_dir
+        self.processor_chain = processor_chain
+        # 创建信号对象并设置线程亲和性
+        self.signals = WorkerSignals()
+        # 确保信号对象在主线程中创建和管理
+        self.signals.moveToThread(QApplication.instance().thread())
+        # 设置AutoDelete为False，确保信号发送完成后再删除
+        self.setAutoDelete(False)
+    
+    @pyqtSlot()
+    def run(self):
+        """处理单个图片"""
+        try:
+            from core.entity.image_container import ImageContainer
+            from utils import ENCODING
+            
+            # 发送开始信号
+            self.signals.started.emit(self.source_path)
+            
+            # 创建并处理图片容器
+            container = ImageContainer(self.source_path)
+            container.is_use_equivalent_focal_length(self.config.use_equivalent_focal_length())
+            
+            # 应用处理器链
+            self.processor_chain.process(container)
+            
+            # 保存处理后的图片
+            target_path = Path(self.output_dir).joinpath(self.source_path.name)
+            container.save(target_path, quality=self.config.get_quality())
+            container.close()
+            
+            # 发送完成信号
+            self.signals.finished.emit(self.source_path)
+        except Exception as e:
+            error_msg = f"处理文件 {self.source_path.name} 时出错: {str(e)}"
+            self.signals.error.emit(error_msg)
+
+
+class WorkerSignals(QObject):
+    """工作线程信号类"""
+    started = pyqtSignal(object)  # 开始处理信号，传递文件路径
+    finished = pyqtSignal(object)  # 完成处理信号，传递文件路径
+    error = pyqtSignal(str)  # 错误信号，传递错误信息
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+
 class ProcessingThread(QThread):
     """图片处理线程"""
     progress_updated = pyqtSignal(int)
@@ -45,19 +101,24 @@ class ProcessingThread(QThread):
         self.output_dir = output_dir
         self.processor_chain = ProcessorChain()
         self.stop_event = False
+        self.thread_pool = QThreadPool()
+        self.thread_pool.setMaxThreadCount(5)  # 设置最大线程数为5
+        self.file_queue = queue.Queue()
     
     def run(self):
+        """运行处理线程
+        
+        使用线程池并行处理图片，并更新进度和统计信息。
+        """
         try:
-            from core.entity.image_container import ImageContainer
-            from utils import ENCODING
+            from utils import get_file_list
             
             file_list = get_file_list(self.input_dir)
             total_files = len(file_list)
-            queued_count = total_files
-            processing_count = 0
-            processed_count = 0
-            start_time = time.time()
-            processed_files = []
+            
+            if total_files == 0:
+                self.processing_finished.emit()
+                return
             
             # 构建处理器链
             layout_type = self.config.get_layout_type()
@@ -75,65 +136,134 @@ class ProcessingThread(QThread):
             if self.config.has_padding_with_original_ratio_enabled() and layout_type and 'square' != layout_type:
                 self.processor_chain.add(PADDING_TO_ORIGINAL_RATIO_PROCESSOR)
             
-            # 处理每个文件
-            for i, source_path in enumerate(file_list):
+            # 初始化统计信息和变量
+            self.queued = total_files
+            self.processing = 0
+            self.processed = 0
+            self.failed = 0
+            self.active_workers = {}  # 跟踪活跃的工作线程
+            self.start_time = time.time()
+            
+            # 将所有文件放入队列
+            for file_path in file_list:
+                self.file_queue.put(file_path)
+            
+            # 连接信号槽
+            self.thread_pool.waitForDone()  # 确保线程池为空
+            
+            # 启动初始工作线程
+            for _ in range(min(5, self.queued)):
+                if not self.file_queue.empty():
+                    self._start_next_worker()
+            
+            # 定期更新统计信息
+            while self.processing > 0 or not self.file_queue.empty():
                 if self.stop_event:
                     break
                 
-                queued_count -= 1
-                processing_count += 1
+                # 更新统计信息
+                elapsed_time = time.time() - self.start_time
+                rate = self.processed / elapsed_time if elapsed_time > 0 else 0
+                self.stats_updated.emit(self.queued, self.processing, self.processed, rate)
                 
-                # 计算每秒处理数
-                elapsed_time = time.time() - start_time
-                if elapsed_time > 0:
-                    processing_rate = (processed_count + 1) / elapsed_time if processed_count > 0 else 0
-                else:
-                    processing_rate = 0
-                
-                # 发送统计信息
-                self.stats_updated.emit(queued_count, processing_count, processed_count, processing_rate)
-                
-                container = ImageContainer(source_path)
-                container.is_use_equivalent_focal_length(self.config.use_equivalent_focal_length())
-                
-                try:
-                    self.processor_chain.process(container)
-                    target_path = Path(self.output_dir).joinpath(source_path.name)
-                    container.save(target_path, quality=self.config.get_quality())
-                    container.close()
-                    processed_count += 1
-                    processed_files.append(source_path.name)
-                except Exception as e:
-                    error_msg = f"处理文件 {source_path.name} 时出错: {str(e)}"
-                    # 在ProcessingThread中获取logger
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.error(error_msg, exc_info=True)
-                    self.error_occurred.emit(error_msg)
-                finally:
-                    processing_count -= 1
-                
-                # 更新进度
-                progress = int((processed_count) / total_files * 100)
+                # 更新进度条
+                progress = int(((self.processed + self.failed) / total_files) * 100)
                 self.progress_updated.emit(progress)
+                
+                # 短暂休眠避免CPU占用过高
+                time.sleep(0.1)
             
-            # 最终更新统计信息
-            self.stats_updated.emit(0, 0, processed_count, 0)
+            # 等待所有线程完成
+            self.thread_pool.waitForDone()
             
+            # 发送最终进度和统计信息
+            self.progress_updated.emit(100 if self.processed + self.failed == total_files else 0)
+            elapsed_time = time.time() - self.start_time
+            rate = self.processed / elapsed_time if elapsed_time > 0 else 0
+            self.stats_updated.emit(0, 0, self.processed, rate)
+            
+            # 处理完成
             if not self.stop_event:
                 self.processing_finished.emit()
             
         except Exception as e:
-            error_msg = f"处理过程中发生错误: {str(e)}"
+            error_msg = f"处理过程中出错: {str(e)}"
             # 在ProcessingThread中获取logger
             import logging
             logger = logging.getLogger(__name__)
             logger.error(error_msg, exc_info=True)
             self.error_occurred.emit(error_msg)
+            
+    def _start_next_worker(self):
+        """启动下一个工作线程"""
+        if self.file_queue.empty() or self.stop_event:
+            return
+        
+        file_path = self.file_queue.get()
+        self.queued -= 1
+        
+        # 创建工作线程
+        worker = ImageWorker(self.config, file_path, self.output_dir, self.processor_chain)
+        worker.signals.started.connect(self._on_worker_started)
+        worker.signals.finished.connect(self._on_worker_finished)
+        worker.signals.error.connect(self._on_worker_error)
+        
+        # 将工作线程添加到活动列表
+        self.active_workers[file_path] = worker
+        
+        # 启动工作线程
+        self.thread_pool.start(worker)
+        
+    def _on_worker_started(self, file_path):
+        """工作线程开始处理信号槽"""
+        self.processing += 1
+        
+    def _on_worker_finished(self, file_path):
+        """工作线程完成处理信号槽"""
+        self.processing -= 1
+        self.processed += 1
+        
+        # 从活动列表中移除并清理工作线程对象
+        if file_path in self.active_workers:
+            worker = self.active_workers[file_path]
+            # 断开所有信号连接
+            worker.signals.started.disconnect(self._on_worker_started)
+            worker.signals.finished.disconnect(self._on_worker_finished)
+            worker.signals.error.disconnect(self._on_worker_error)
+            del self.active_workers[file_path]
+        
+        # 启动下一个工作线程
+        self._start_next_worker()
+        
+    def _on_worker_error(self, error_msg):
+        """工作线程错误信号槽"""
+        self.processing -= 1
+        self.failed += 1
+        
+        # 向主线程发送错误信息
+        self.error_occurred.emit(error_msg)
+        
+        # 启动下一个工作线程
+        self._start_next_worker()
+        
+    def _cleanup_workers(self):
+        """清理所有工作线程"""
+        # 断开所有信号连接
+        for file_path, worker in list(self.active_workers.items()):
+            try:
+                worker.signals.started.disconnect(self._on_worker_started)
+                worker.signals.finished.disconnect(self._on_worker_finished)
+                worker.signals.error.disconnect(self._on_worker_error)
+            except:
+                pass
+        # 清空活动工作线程列表
+        self.active_workers.clear()
     
     def stop(self):
         """停止处理线程"""
         self.stop_event = True
+        # 清理所有工作线程
+        self._cleanup_workers()
 
 
 class MainWindow(FluentWindow):
@@ -159,10 +289,119 @@ class MainWindow(FluentWindow):
         # 添加界面到导航
         self.addSubInterface(self.main_interface, FluentIcon.HOME, "图片处理")
         
+        # 创建鸣谢与打赏标签页并添加到导航
+        self.thanks_interface = self.create_thanks_interface()
+        self.addSubInterface(self.thanks_interface, FluentIcon.HEART, "鸣谢与支持")
+        
         # 设置初始界面
         self.stackedWidget.setCurrentWidget(self.main_interface)
         self.navigationInterface.setCurrentItem(self.main_interface.objectName())
         
+    def create_thanks_interface(self):
+        """创建鸣谢与打赏标签页"""
+        interface = QWidget()
+        interface.setObjectName("thanksInterface")
+        main_layout = QVBoxLayout(interface)
+        
+        # 标题
+        title_label = TitleLabel("鸣谢与支持")
+        main_layout.addWidget(title_label)
+        
+        # 鸣谢内容
+        thanks_text = """
+感谢您使用 Copyleft (Semi-Utils) 图片处理工具！
+
+本工具由开源社区开发，完全免费使用。
+
+如果您觉得本工具对您有所帮助，欢迎通过以下方式支持我们的开发工作：
+
+- 分享本工具给更多有需要的朋友
+- 在 GitHub 上给本项目和原项目点个 Star
+- 给我们买个咖啡☕
+
+您的支持是我们持续改进的动力！
+        """
+        
+        # 创建文本标签
+        thanks_label = BodyLabel(thanks_text)
+        thanks_label.setWordWrap(True)
+        thanks_label.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(thanks_label)
+        
+        # 创建水平布局来容纳两张打赏图片
+        images_layout = QHBoxLayout()
+        
+        # 左侧：原作者打赏图片
+        try:
+            original_image_path = "d:/Github/Copyleft/core/enums/WeChat.JPG"
+            original_pixmap = QPixmap(original_image_path)
+            if not original_pixmap.isNull():
+                # 缩放图片保持比例
+                scaled_original_pixmap = original_pixmap.scaledToWidth(300, Qt.SmoothTransformation)
+                original_image_label = QLabel()
+                original_image_label.setPixmap(scaled_original_pixmap)
+                original_image_label.setAlignment(Qt.AlignCenter)
+                
+                # 创建左侧图片的垂直布局
+                left_layout = QVBoxLayout()
+                left_layout.addWidget(original_image_label)
+                
+                # 添加左侧图片说明
+                original_note = BodyLabel("原作者")
+                original_note.setAlignment(Qt.AlignCenter)
+                left_layout.addWidget(original_note)
+                
+                images_layout.addLayout(left_layout)
+            else:
+                original_error_label = BodyLabel("无法加载原作者打赏图片")
+                original_error_label.setAlignment(Qt.AlignCenter)
+                images_layout.addWidget(original_error_label, 1)
+        except Exception as e:
+            original_error_label = BodyLabel(f"加载原作者图片时出错: {str(e)}")
+            original_error_label.setAlignment(Qt.AlignCenter)
+            images_layout.addWidget(original_error_label, 1)
+        
+        # 中间间隔 - 减小间隔大小
+        spacer = QSpacerItem(20, 20, QSizePolicy.Fixed, QSizePolicy.Minimum)
+        images_layout.addItem(spacer)
+        
+        # 右侧：我（当前用户）的打赏图片
+        try:
+            my_image_path = "d:/Github/Copyleft/core/enums/IMG_7190.JPG"
+            my_pixmap = QPixmap(my_image_path)
+            if not my_pixmap.isNull():
+                # 缩放图片保持比例
+                scaled_my_pixmap = my_pixmap.scaledToWidth(300, Qt.SmoothTransformation)
+                my_image_label = QLabel()
+                my_image_label.setPixmap(scaled_my_pixmap)
+                my_image_label.setAlignment(Qt.AlignCenter)
+                
+                # 创建右侧图片的垂直布局
+                right_layout = QVBoxLayout()
+                right_layout.addWidget(my_image_label)
+                
+                # 添加右侧图片说明
+                my_note = BodyLabel("我")
+                my_note.setAlignment(Qt.AlignCenter)
+                right_layout.addWidget(my_note)
+                
+                images_layout.addLayout(right_layout)
+            else:
+                my_error_label = BodyLabel("无法加载我的打赏图片")
+                my_error_label.setAlignment(Qt.AlignCenter)
+                images_layout.addWidget(my_error_label)
+        except Exception as e:
+            my_error_label = BodyLabel(f"加载我的图片时出错: {str(e)}")
+            my_error_label.setAlignment(Qt.AlignCenter)
+            images_layout.addWidget(my_error_label)
+        
+        # 将水平布局添加到主垂直布局
+        main_layout.addLayout(images_layout)
+        
+        main_layout.addStretch(1)
+        
+        return interface
+    
     def create_main_interface(self):
         """创建合并后的主界面"""
         interface = QWidget()
@@ -380,7 +619,15 @@ class MainWindow(FluentWindow):
         content_layout.addWidget(process_panel, 1)    # 右侧占1份
         
         main_layout.addLayout(content_layout)
-        
+
+        # 添加版本和版权标识
+        footer_layout = QHBoxLayout()
+        footer_layout.addStretch()
+        version_label = BodyLabel("Copyleft v2.5 © 2025 PiggyWu981")
+        version_label.setAlignment(Qt.AlignRight | Qt.AlignBottom)
+        footer_layout.addWidget(version_label)
+        main_layout.addLayout(footer_layout)
+
         return interface
         
     # 保留旧的界面方法引用，用于兼容性
@@ -534,12 +781,15 @@ class MainWindow(FluentWindow):
 def main():
     """主函数"""
     try:
+        # 启用高DPI支持 - 必须在创建QApplication之前设置
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+        
         app = QApplication(sys.argv)
         
         # 设置应用程序信息
         app.setApplicationName("Semi-Utils")
-        app.setApplicationVersion("2.0")
-        app.setOrganizationName("leslievan")
+        app.setApplicationVersion("2.5")
+        app.setOrganizationName("PiggyWu981")
         
         # 设置Fluent Design主题
         setTheme(Theme.LIGHT)  # 使用亮色主题
