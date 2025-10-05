@@ -161,6 +161,7 @@ python main.py
 ### 4. 日志显示问题
 **问题**：日志区域占用空间，信息不直观
 **解决方案**：v2.2版本已删除日志显示，改为错误弹窗提示，界面更简洁
+
 ---
 ## 技术架构
 
@@ -222,10 +223,10 @@ Copyleft/
 
 如果这个项目对你有帮助，欢迎通过给我们买杯咖啡支持我们的工作！
 
-![微信支付](core\enums\IMG_7190.JPG)
+![core\enums\IMG_7190.JPG](https://github.com/Piggywu981/Copyleft/blob/main/core/enums/IMG_7190.JPG)
 
 ***以及原作者：***
-![微信支付](core\enums\wechat.jpg)
+![core\enums\wechat.jpg](https://github.com/Piggywu981/Copyleft/blob/main/core/enums/wechat.jpg)
 
 ### 其他支持方式
 - ⭐ Star 这个项目
