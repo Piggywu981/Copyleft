@@ -277,11 +277,10 @@ class MainWindow(FluentWindow):
         
     def init_ui(self):
         """初始化用户界面"""
-        self.setWindowTitle("Semi-Utils - 图片处理工具")
+        self.setWindowTitle("Copyleft - 图片处理工具")
         self.resize(1000, 700)
         
-        # 设置主题颜色
-        setThemeColor('#0078D4')  # Microsoft蓝色主题色
+        # 使用系统主题颜色 - 不设置固定颜色值，让应用程序自动使用系统主题色
         
         # 创建单一界面（合并所有功能）
         self.main_interface = self.create_main_interface()
