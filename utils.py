@@ -3,6 +3,7 @@ import platform
 import re
 import shutil
 import subprocess
+from fractions import Fraction
 from pathlib import Path
 
 from PIL import Image
@@ -10,30 +11,196 @@ from PIL import ImageDraw
 from PIL import ImageFilter
 from PIL import ImageOps
 
-from core.enums.constant import TRANSPARENT
-
-if platform.system() == 'Windows':
-    EXIFTOOL_PATH = Path('./exiftool/exiftool.exe')
-    ENCODING = 'gbk'
-elif shutil.which('exiftool') is not None:
-    EXIFTOOL_PATH = shutil.which('exiftool')
-    ENCODING = 'utf-8'
-else:
-    EXIFTOOL_PATH = Path('./exiftool/exiftool')
-    ENCODING = 'utf-8'
+# 透明色；utils 为底层模块，不反向依赖 core 包（避免循环导入）
+TRANSPARENT = (0, 0, 0, 0)
 
 logger = logging.getLogger(__name__)
+
+# 优先使用 exiftool（可读取 Makernotes，如 Nikon 单反的 ISO/镜头信息）；
+# 未安装时回退到 Pillow 内置 EXIF 读取（基础拍摄信息开箱即用）
+_EXIFTOOL_CANDIDATES = [Path('./exiftool.exe'), Path('./exiftool/exiftool.exe')] \
+    if platform.system() == 'Windows' else [Path('./exiftool'), Path('./exiftool/exiftool')]
+_found = shutil.which('exiftool')
+EXIFTOOL_PATH = Path(_found) if _found else next(
+    (c for c in _EXIFTOOL_CANDIDATES if c.exists()), None)
+EXIFTOOL_AVAILABLE = EXIFTOOL_PATH is not None
+
+EXIFTOOL_DOWNLOAD_PAGE = 'https://exiftool.org/'
+# 官网首页解析失败时使用的兜底版本
+_EXIFTOOL_FALLBACK_VERSION = '13.59'
+
+
+def reload_exiftool_path():
+    """重新探测 exiftool（自动下载完成后调用）"""
+    global EXIFTOOL_PATH, EXIFTOOL_AVAILABLE
+    _found = shutil.which('exiftool')
+    EXIFTOOL_PATH = Path(_found) if _found else next(
+        (c for c in _EXIFTOOL_CANDIDATES if c.exists()), None)
+    EXIFTOOL_AVAILABLE = EXIFTOOL_PATH is not None
+    return EXIFTOOL_AVAILABLE
+
+
+def download_exiftool(dest_dir='.') -> Path:
+    """
+    从 exiftool.org 下载 Windows 版 exiftool 并解压为 dest_dir/exiftool.exe
+    :param dest_dir: 目标目录，默认项目根目录
+    :return: exe 路径，失败抛异常
+    """
+    import io
+    import urllib.request
+    import zipfile
+
+    # 从官网首页解析最新版本号，失败则使用兜底版本
+    version = _EXIFTOOL_FALLBACK_VERSION
+    try:
+        page = urllib.request.urlopen(EXIFTOOL_DOWNLOAD_PAGE, timeout=15).read()
+        match = re.search(r'exiftool-(\d+\.\d+)_64\.zip', page.decode('utf-8', errors='ignore'))
+        if match:
+            version = match.group(1)
+    except Exception as e:
+        logger.warning(f'解析 exiftool 版本失败，使用兜底版本 {version}：{e}')
+
+    url = f'https://downloads.sourceforge.net/project/exiftool/exiftool-{version}_64.zip'
+    logger.info(f'下载 exiftool：{url}')
+    data = urllib.request.urlopen(url, timeout=180).read()
+
+    dest_dir = Path(dest_dir)
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        names = zf.namelist()
+        # 主程序为 exiftool(-k).exe / exiftool.exe，排除运行时自带的 perl.exe
+        main_exe = next((name for name in names
+                         if name.lower().endswith('.exe') and 'perl' not in name.lower()), None)
+        if main_exe is None:
+            raise RuntimeError('压缩包中未找到 exiftool 主程序')
+        exe_bytes = zf.read(main_exe)
+        # 分体式打包：exiftool_files/ 为 Perl 运行时，必须与主程序同目录；去掉 zip 顶层目录平铺解压
+        for name in names:
+            if name.endswith('/') or name == main_exe:
+                continue
+            parts = Path(name).parts
+            if len(parts) < 2:
+                continue
+            target = dest_dir.joinpath(*parts[1:])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(zf.read(name))
+
+    dest = dest_dir / 'exiftool.exe'
+    dest.write_bytes(exe_bytes)
+    reload_exiftool_path()
+    logger.info(f'exiftool {version} 已就绪：{dest}')
+    return dest
 
 
 def get_file_list(path):
     """
-    获取 jpg 文件列表
+    获取 jpg/png 文件列表
     :param path: 路径
-    :return: 文件名
+    :return: 文件路径列表
     """
-    path = Path(path, encoding=ENCODING)
-    return [file_path for file_path in path.iterdir()
-            if file_path.is_file() and file_path.suffix in ['.jpg', '.jpeg', '.JPG', '.JPEG', '.png', '.PNG']]
+    path = Path(path)
+    supported_exts = {'.jpg', '.jpeg', '.png'}
+    return sorted(file_path for file_path in path.iterdir()
+                  if file_path.is_file() and file_path.suffix.lower() in supported_exts)
+
+
+def _exiftool_exif(path) -> dict:
+    """通过 exiftool 获取 exif 信息"""
+    exif_dict = {}
+    output_bytes = subprocess.check_output([EXIFTOOL_PATH, '-d', '%Y-%m-%d %H:%M:%S%3f%z', path])
+    output = output_bytes.decode('utf-8', errors='ignore')
+
+    for line in output.splitlines():
+        # 将每一行按冒号分隔成键值对
+        kv_pair = line.split(':')
+        if len(kv_pair) < 2:
+            continue
+        key = kv_pair[0].strip()
+        value = ':'.join(kv_pair[1:]).strip()
+        # 将键中的空格移除
+        key = re.sub(r'\s+', '', key)
+        key = re.sub(r'/', '', key)
+        # 将键值对添加到字典中
+        exif_dict[key] = value
+    for key, value in exif_dict.items():
+        # 过滤非 ASCII 字符
+        value_clean = ''.join(c for c in value if ord(c) < 128)
+        # 将处理后的值更新到 exif_dict 中
+        exif_dict[key] = value_clean
+    return exif_dict
+
+
+def _tag_str(value) -> str:
+    if value is None:
+        return ''
+    if isinstance(value, bytes):
+        return value.decode('utf-8', errors='ignore').replace('\x00', '').strip()
+    return str(value).strip()
+
+
+def _fmt_exposure_time(value) -> str:
+    rat = Fraction(int(value.numerator), int(value.denominator))
+    if rat >= 1:
+        return str(rat.numerator) if rat.denominator == 1 else f'{float(rat):g}'
+    return f'1/{round(1 / float(rat))}'
+
+
+# EXIF Orientation tag 值与原 exiftool 输出的对应关系
+_ORIENTATION_NAMES = {1: 'Rotate 0', 3: 'Rotate 180', 6: 'Rotate 90 CW', 8: 'Rotate 270 CW'}
+
+
+def _pillow_exif(path) -> dict:
+    """通过 Pillow 读取 exif 信息，键名与 exiftool 版本保持兼容"""
+    exif_dict = {}
+    with Image.open(path) as im:
+        exif = im.getexif()
+        exif_ifd = exif.get_ifd(0x8769)
+        gps_ifd = exif.get_ifd(0x8825)
+
+    if _tag_str(exif.get(271)):
+        exif_dict['Make'] = _tag_str(exif.get(271))
+    if _tag_str(exif.get(272)):
+        exif_dict['CameraModelName'] = _tag_str(exif.get(272))
+    if _tag_str(exif_ifd.get(42032)):
+        exif_dict['LensMake'] = _tag_str(exif_ifd.get(42032))
+    if _tag_str(exif_ifd.get(42036)):
+        exif_dict['LensModel'] = _tag_str(exif_ifd.get(42036))
+    dto = _tag_str(exif_ifd.get(36867))
+    if dto:
+        # EXIF 原生日期为 "2014:01:01 08:25:54" 冒号格式，dateutil 会丢弃日期部分，
+        # 规范化为 "2014-01-01 08:25:54"（与 exiftool -d 的输出格式一致）
+        date_part, _, time_part = dto.partition(' ')
+        if time_part:
+            dto = date_part.replace(':', '-') + ' ' + time_part
+        exif_dict['DateTimeOriginal'] = dto
+
+    if exif_ifd.get(37386) is not None:
+        exif_dict['FocalLength'] = f'{float(exif_ifd.get(37386)):.1f} mm'
+    if exif_ifd.get(41989) is not None:
+        exif_dict['FocalLengthIn35mmFormat'] = f'{float(exif_ifd.get(41989)):.1f} mm'
+    if exif_ifd.get(33437) is not None:
+        exif_dict['FNumber'] = f'{float(exif_ifd.get(33437)):.1f}'
+    if exif_ifd.get(33434) is not None:
+        exif_dict['ExposureTime'] = _fmt_exposure_time(exif_ifd.get(33434))
+    if exif_ifd.get(8827) is not None:
+        exif_dict['ISO'] = str(int(exif_ifd.get(8827)))
+    if exif.get(274) in _ORIENTATION_NAMES:
+        exif_dict['Orientation'] = _ORIENTATION_NAMES[exif.get(274)]
+
+    # GPS：组装成 exiftool 的 GPSPosition 格式 "50 deg 32' 27.72\" N, 13 deg 22' 5.09\" E"
+    lat, lat_ref = gps_ifd.get(2), _tag_str(gps_ifd.get(1))
+    lon, lon_ref = gps_ifd.get(4), _tag_str(gps_ifd.get(3))
+
+    def _fmt_gps(values, ref):
+        deg, minute, sec = (float(v) for v in values)
+        return f'{deg:.0f} deg {minute:.0f}\' {sec:.2f}" {ref}'
+
+    try:
+        if lat and lon and lat_ref and lon_ref:
+            exif_dict['GPSPosition'] = f"{_fmt_gps(lat, lat_ref)}, {_fmt_gps(lon, lon_ref)}"
+    except (TypeError, ValueError):
+        pass
+
+    return exif_dict
 
 
 def get_exif(path) -> dict:
@@ -42,83 +209,16 @@ def get_exif(path) -> dict:
     :param path: 照片路径
     :return: exif信息
     """
-    exif_dict = {}
+    if EXIFTOOL_AVAILABLE:
+        try:
+            return _exiftool_exif(path)
+        except Exception as e:
+            logger.warning(f'exiftool 读取失败，回退到 Pillow：{path} : {e}')
     try:
-        output_bytes = subprocess.check_output([EXIFTOOL_PATH, '-d', '%Y-%m-%d %H:%M:%S%3f%z', path])
-        output = output_bytes.decode('utf-8', errors='ignore')
-
-        lines = output.splitlines()
-        utf8_lines = [line for line in lines]
-
-        for line in utf8_lines:
-            # 将每一行按冒号分隔成键值对
-            kv_pair = line.split(':')
-            if len(kv_pair) < 2:
-                continue
-            key = kv_pair[0].strip()
-            value = ':'.join(kv_pair[1:]).strip()
-            # 将键中的空格移除
-            key = re.sub(r'\s+', '', key)
-            key = re.sub(r'/', '', key)
-            # 将键值对添加到字典中
-            exif_dict[key] = value
-        for key, value in exif_dict.items():
-            # 过滤非 ASCII 字符
-            value_clean = ''.join(c for c in value if ord(c) < 128)
-            # 将处理后的值更新到 exif_dict 中
-            exif_dict[key] = value_clean
+        return _pillow_exif(path)
     except Exception as e:
         logger.error(f'get_exif error: {path} : {e}')
-
-    return exif_dict
-
-
-def insert_exif(source_path, target_path) -> None:
-    """
-    复制照片的 exif 信息
-    :param source_path: 源照片路径
-    :param target_path: 目的照片路径
-    """
-    try:
-        # 将 exif 信息转换为字节串
-        subprocess.check_output([EXIFTOOL_PATH, '-tagsfromfile', source_path, '-overwrite_original', target_path])
-    except ValueError as e:
-        logger.exception(f'ValueError: {source_path}: cannot insert exif {str(e)}')
-
-
-TINY_HEIGHT = 800
-
-
-def remove_white_edge(image):
-    """
-    移除图片白边
-    :param image: 图片对象
-    :return: 移除白边后的图片对象
-    """
-    # 获取像素信息
-    pixels = image.load()
-
-    # 获取图像大小
-    width, height = image.size
-
-    # 计算最小的 X、Y、最大的 X、Y 坐标
-    min_x, min_y = width - 1, height - 1
-    max_x, max_y = 0, 0
-    for y in range(height):
-        for x in range(width):
-            if pixels[x, y] != (255, 255, 255):
-                min_x = min(min_x, x)
-                min_y = min(min_y, y)
-                max_x = max(max_x, x)
-                max_y = max(max_y, y)
-
-    # 计算新的图像大小
-    new_width = max_x - min_x + 1
-    new_height = max_y - min_y + 1
-
-    # 裁剪图像
-    new_image = image.crop((min_x, min_y, max_x + 1, max_y + 1))
-    return new_image
+    return {}
 
 
 def concatenate_image(images, align='left'):
@@ -404,7 +504,7 @@ def extract_gps_info(gps_info: str):
 def add_rounded_corners(image, radius):
     """
     为图片添加圆角效果
-    
+
     :param image: 图片对象
     :param radius: 圆角半径
     :return: 添加圆角后的图片对象
@@ -412,28 +512,28 @@ def add_rounded_corners(image, radius):
     # 创建一个与原图大小相同的透明背景
     rounded_img = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(rounded_img)
-    
+
     # 绘制圆角矩形
     draw.rounded_rectangle(
         [(0, 0), image.size],
         radius=radius,
         fill=(255, 255, 255, 255)
     )
-    
+
     # 如果原图不是RGBA模式，转换为RGBA模式
     if image.mode != "RGBA":
         image = image.convert("RGBA")
-    
+
     # 将原图与圆角矩形蒙版合并
     rounded_img.paste(image, mask=rounded_img)
-    
+
     return rounded_img
 
 
 def add_soft_shadow(image, radius=25, opacity=128):
     """
     为图片四周都添加由内向外逐渐变淡的柔滑黑色阴影效果，以增强层次感
-    
+
     :param image: 图片对象
     :param radius: 阴影模糊半径，控制阴影的扩散范围和柔和度
     :param opacity: 阴影不透明度 (0-255)
@@ -445,11 +545,11 @@ def add_soft_shadow(image, radius=25, opacity=128):
     shadow_width = image.width + shadow_margin * 2
     shadow_height = image.height + shadow_margin * 2
     result = Image.new("RGBA", (shadow_width, shadow_height), (0, 0, 0, 0))
-    
+
     # 创建阴影层
     shadow_layer = Image.new("RGBA", (shadow_width, shadow_height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(shadow_layer)
-    
+
     # 绘制阴影基础形状（位于中心位置）
     # 不使用偏移，确保阴影均匀分布在四周
     shadow_x = shadow_margin
@@ -458,17 +558,17 @@ def add_soft_shadow(image, radius=25, opacity=128):
         [(shadow_x, shadow_y), (shadow_x + image.width, shadow_y + image.height)],
         fill=(0, 0, 0, opacity)
     )
-    
+
     # 应用高斯模糊使阴影变柔滑并向四周扩散
     # 多次应用模糊可以获得更柔和的效果
     shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=radius))
     # 再次应用模糊以增强由内向外的渐变效果
     shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=radius//2))
-    
+
     # 将阴影层与结果层合并
     result.paste(shadow_layer, (0, 0), shadow_layer)
-    
+
     # 将原图放置在结果层的中心位置
     result.paste(image, (shadow_margin, shadow_margin), image)
-    
+
     return result

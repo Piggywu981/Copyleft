@@ -132,7 +132,6 @@ class WatermarkProcessor(ProcessorComponent):
         :return: 添加水印后的图片对象
         """
         config = self.config
-        config.bg_color = self.bg_color
 
         # 下方水印的占比
         ratio = (.04 if container.get_ratio() >= 1 else .09) + 0.02 * config.get_font_padding_level()
@@ -174,8 +173,8 @@ class WatermarkProcessor(ProcessorComponent):
         right = padding_image(right, int(max_height * padding_ratio), 't')
         right = padding_image(right, left.height - right.height, 'b')
 
-        logo = config.load_logo(container.make)
         if self.logo_enable:
+            logo = config.load_logo(container.make)
             if self.is_logo_left():
                 # 如果 logo 在左边
                 line = LINE_TRANSPARENT.copy()
@@ -274,8 +273,11 @@ class CustomWatermarkProcessor(WatermarkProcessor):
 
     def __init__(self, config: Config):
         super().__init__(config)
-        # 读取配置文件
-        self.logo_position = self.config.is_logo_left()
+        self._refresh()
+
+    def _refresh(self):
+        """处理前实时读取配置，保证 GUI 修改设置后生效"""
+        self.logo_position = 'left' if self.config.is_logo_left() else 'right'
         self.logo_enable = self.config.has_logo_enabled()
         self.bg_color = self.config.get_background_color()
         self.font_color_lt = self.config.get_left_top().get_color()
@@ -286,6 +288,10 @@ class CustomWatermarkProcessor(WatermarkProcessor):
         self.bold_font_rt = self.config.get_right_top().is_bold()
         self.font_color_rb = self.config.get_right_bottom().get_color()
         self.bold_font_rb = self.config.get_right_bottom().is_bold()
+
+    def process(self, container: ImageContainer) -> None:
+        self._refresh()
+        super().process(container)
 
 
 class MarginProcessor(ProcessorComponent):
@@ -507,7 +513,7 @@ class BackgroundBlurWithParamsProcessor(ProcessorComponent):
         
         # 为圆角后的原图添加柔滑的黑色阴影效果
         # 阴影参数：模糊半径为50，不透明度为128
-        shadow_img = add_soft_shadow(rounded_img, radius=50, opacity=256)
+        shadow_img = add_soft_shadow(rounded_img, radius=50, opacity=255)
         
         # 计算添加阴影后的原图位置
         # 阴影边缘留出足够空间，确保阴影效果完整显示

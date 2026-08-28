@@ -6,7 +6,7 @@ from enum import Enum
 from pathlib import Path
 
 from PIL import Image
-from PIL.Image import Transpose
+from PIL import ImageOps
 from dateutil import parser
 
 from .config import ElementConfig
@@ -35,17 +35,19 @@ class ExifId(Enum):
     ORIENTATION = 'Orientation'
 
 
-PATTERN = re.compile(r"(\d+)\.")  # 匹配小数
+PATTERN = re.compile(r"(\d+(?:\.\d+)?)")  # 匹配数字（含小数）
 
 
-def get_datetime(exif) -> datetime:
-    dt = datetime.now()
+def get_datetime(exif):
+    """解析拍摄时间，无有效 EXIF 时间时返回 None"""
+    raw = extract_attribute(exif, ExifId.DATETIME.value)
+    if not raw:
+        return None
     try:
-        dt = parser.parse(extract_attribute(exif, ExifId.DATETIME.value,
-                                            default_value=str(datetime.now())))
-    except ValueError as e:
-        logger.info(f'Error: 时间格式错误：{extract_attribute(exif, ExifId.DATETIME.value)}')
-    return dt
+        return parser.parse(raw)
+    except (ValueError, TypeError):
+        logger.info(f'Error: 时间格式错误：{raw}')
+        return None
 
 
 def get_focal_length(exif):
@@ -53,18 +55,14 @@ def get_focal_length(exif):
     focal_length_in_35mm_film = DEFAULT_VALUE
 
     try:
-        focal_lengths = PATTERN.findall(extract_attribute(exif, ExifId.FOCAL_LENGTH.value))
-        try:
-            focal_length = focal_lengths[0] if focal_length else DEFAULT_VALUE
-        except IndexError as e:
-            logger.info(
-                f'ValueError: 不存在焦距：{focal_lengths} : {e}')
-        try:
-            focal_length_in_35mm_film: str = focal_lengths[1] if focal_length else DEFAULT_VALUE
-        except IndexError as e:
-            logger.info(f'ValueError: 不存在 35mm 焦距：{focal_lengths} : {e}')
+        focal_matches = PATTERN.findall(extract_attribute(exif, ExifId.FOCAL_LENGTH.value))
+        if focal_matches:
+            focal_length = focal_matches[0]
+        focal_35mm_matches = PATTERN.findall(extract_attribute(exif, ExifId.FOCAL_LENGTH_IN_35MM_FILM.value))
+        if focal_35mm_matches:
+            focal_length_in_35mm_film = focal_35mm_matches[0]
     except Exception as e:
-        logger.info(f'KeyError: 焦距转换错误：{extract_attribute(exif, ExifId.FOCAL_LENGTH.value)} : {e}')
+        logger.info(f'焦距解析错误：{extract_attribute(exif, ExifId.FOCAL_LENGTH.value)} : {e}')
 
     return focal_length, focal_length_in_35mm_film
 
@@ -86,6 +84,9 @@ class ImageContainer(object):
         self.lens_model: str = extract_attribute(self.exif, *ExifId.LENS_MODEL.value)
         self.lens_make: str = extract_attribute(self.exif, ExifId.LENS_MAKE.value)
         self.date: datetime = get_datetime(self.exif)
+        if self.date is None:
+            # 无 EXIF 时间时使用文件修改时间，避免误显示为处理时刻
+            self.date = datetime.fromtimestamp(Path(self.path).stat().st_mtime)
         self.focal_length, self.focal_length_in_35mm_film = get_focal_length(self.exif)
         self.f_number: str = extract_attribute(self.exif, ExifId.F_NUMBER.value, default_value=DEFAULT_VALUE)
         self.exposure_time: str = extract_attribute(self.exif, ExifId.EXPOSURE_TIME.value, default_value=DEFAULT_VALUE,
@@ -95,18 +96,8 @@ class ImageContainer(object):
         # 是否使用等效焦距
         self.use_equivalent_focal_length: bool = False
 
-        # 修正图像方向
-        self.orientation = self.exif[ExifId.ORIENTATION.value] if ExifId.ORIENTATION.value in self.exif else 1
-        if self.orientation == "Rotate 0":
-            pass
-        elif self.orientation == "Rotate 90 CW":
-            self.img = self.img.transpose(Transpose.ROTATE_270)
-        elif self.orientation == "Rotate 180":
-            self.img = self.img.transpose(Transpose.ROTATE_180)
-        elif self.orientation == "Rotate 270 CW":
-            self.img = self.img.transpose(Transpose.ROTATE_90)
-        else:
-            pass
+        # 依据 EXIF 方向标签摆正像素（exif_transpose 同时会移除方向标签，防止查看器二次旋转）
+        self.img = ImageOps.exif_transpose(self.img)
 
         # 水印设置
         self.custom = '无'
@@ -183,18 +174,15 @@ class ImageContainer(object):
         :param element: element 对象有 name 和 value 两个字段，通过 name 和 value 获取属性值
         :return: 属性值字符串
         """
-        if element.get_name() in self._param_dict:
-            return self._param_dict[element.get_name()]
-
-        if element is None or element.get_name() == '':
+        if element is None:
             return ''
-        if element.get_name() == CUSTOM_VALUE:
+        name = element.get_name()
+        if name in self._param_dict:
+            return self._param_dict[name]
+        if name == CUSTOM_VALUE:
             self.custom = element.get_value()
             return self.custom
-        elif element.get_name() in self._param_dict:
-            return self._param_dict[element.get_name()]
-        else:
-            return ''
+        return ''
 
     def get_param_str(self) -> str:
         """
@@ -213,9 +201,6 @@ class ImageContainer(object):
 
     def get_original_ratio(self):
         return self.original_width / self.original_height
-
-    def get_logo(self):
-        return self.logo
 
     def set_logo(self, logo) -> None:
         self.logo = logo
@@ -238,25 +223,21 @@ class ImageContainer(object):
 
     def close(self):
         self.img.close()
-        self.watermark_img.close()
+        if self.watermark_img is not None:
+            self.watermark_img.close()
 
     def save(self, target_path, quality=100):
-        if self.orientation == "Rotate 0":
-            pass
-        elif self.orientation == "Rotate 90 CW":
-            self.watermark_img = self.watermark_img.transpose(Transpose.ROTATE_90)
-        elif self.orientation == "Rotate 180":
-            self.watermark_img = self.watermark_img.transpose(Transpose.ROTATE_180)
-        elif self.orientation == "Rotate 270 CW":
-            self.watermark_img = self.watermark_img.transpose(Transpose.ROTATE_270)
-        else:
-            pass
-
         if self.watermark_img.mode != 'RGB':
             self.watermark_img = self.watermark_img.convert('RGB')
 
+        # 方向已烘焙进像素，输出前移除 Orientation 标签，避免查看器二次旋转
+        exif_bytes = None
         if 'exif' in self.img.info:
-            self.watermark_img.save(target_path, quality=quality, encoding='utf-8',
-                                    exif=self.img.info['exif'] if 'exif' in self.img.info else '')
+            exif_obj = self.img.getexif()
+            exif_obj.pop(0x0112, None)
+            exif_bytes = exif_obj.tobytes()
+
+        if exif_bytes:
+            self.watermark_img.save(target_path, quality=quality, encoding='utf-8', exif=exif_bytes)
         else:
             self.watermark_img.save(target_path, quality=quality, encoding='utf-8')

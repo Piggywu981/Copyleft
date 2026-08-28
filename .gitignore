@@ -10,3 +10,7 @@ build
 dist
 logs
 exiftool-13.37_64.zip
+exiftool.exe
+
+exiftool_files/
+*.spec

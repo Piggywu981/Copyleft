@@ -85,14 +85,17 @@ class Config(object):
             return self._logos[make]
         # 未读取到内存中的 logo
         for m in self._makes.values():
-            if m['id'] == '':
-                pass
-            if m['id'].lower() in make.lower():
+            make_id = m['id']
+            if not make_id:
+                continue
+            if make_id.lower() in make.lower():
                 logo = Image.open(m['path'])
+                logo.load()
                 self._logos[make] = logo
                 return logo
         logo_path = self._data['logo']['default']['path']
         logo = Image.open(logo_path)
+        logo.load()
         self._logos[make] = logo
         return logo
 
@@ -102,11 +105,17 @@ class Config(object):
     def get_input_dir(self):
         return self._data['base']['input_dir']
 
+    def set_input_dir(self, input_dir):
+        self._data['base']['input_dir'] = input_dir
+
     def get_output_dir(self):
         output_dir = self._data['base']['output_dir']
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
         return output_dir
+
+    def set_output_dir(self, output_dir):
+        self._data['base']['output_dir'] = output_dir
 
     def get_quality(self):
         return self._data['base']['quality']
@@ -155,7 +164,7 @@ class Config(object):
         return bold_font_size + font_size
 
     def save(self):
-        with open(self._path, 'w') as f:
+        with open(self._path, 'w', encoding='utf-8') as f:
             yaml.dump(self._data, f, encoding='utf-8')
 
     def enable_shadow(self):
@@ -256,8 +265,15 @@ class Config(object):
 
     def set_custom(self, location):
         self._data['layout']['elements'][location]['name'] = 'Custom'
-        user_input = input('输入自定义字段的值（上次使用的值为：{}）\n'.format(self.get_custom_value(location)))
-        self._data['layout']['elements'][location]['value'] = user_input
+        if 'value' not in self._data['layout']['elements'][location]:
+            self._data['layout']['elements'][location]['value'] = ''
+
+    def set_custom_text(self, value):
+        """更新所有使用"自定义"的位置的自定义文字"""
+        for location in (LOCATION_LEFT_TOP, LOCATION_RIGHT_TOP, LOCATION_LEFT_BOTTOM, LOCATION_RIGHT_BOTTOM):
+            element = self._data['layout']['elements'][location]
+            if element.get('name') == CUSTOM_VALUE:
+                element['value'] = value
 
     def get_element_name(self, location) -> str:
         """获取指定位置的元素名称，如果为null或缺失则返回默认值"""

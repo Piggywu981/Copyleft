@@ -1,4 +1,4 @@
-# Semi-Utils - PyQt5 GUI版本 v2.5
+# Semi-Utils - PyQt5 GUI版本 v2.6.0
 ---
 ## 项目背景
 
@@ -16,7 +16,7 @@
 
 ### 1. 用户界面迁移
 - **从命令行迁移到图形界面**：将原有的命令行交互模式完全替换为PyQt5图形用户界面
-- **标签页设计**：采用三标签页设计（基本设置、高级设置、图片处理）提供更直观的操作体验
+- **单界面设计**：左侧参数设置，右侧文件选择、处理控制与统计（v2.2 起合并原有三个标签页）
 - **实时配置预览**：所有设置更改实时生效，无需手动保存
 
 ### 2. 功能增强
@@ -33,7 +33,7 @@
 ## 系统要求
 
 - **操作系统**：Windows 7/8/10/11
-- **Python版本**：Python 3.7+
+- **Python版本**：Python 3.10+
 - **依赖包**：详见`requirements.txt`
 ---
 ## 安装说明
@@ -43,9 +43,10 @@
 pip install -r requirements.txt
 ```
 
-### 2. （重要）下载并解压exiftool
-- 从[exiftool官网](https://exiftool.org/)下载最新版本的exiftool
-- 解压到项目根目录下
+### 2. （可选）安装 exiftool
+程序内置基于 Pillow 的 EXIF 读取，**不安装也能正常显示相机型号、拍摄参数、日期等信息**。
+程序启动时会自动检测，若未检测到 exiftool 会询问是否自动下载（仅 Windows）。
+部分单反（如 Nikon D810）将 ISO 和镜头信息存放在 Makernotes 中，若需完整读取这些字段，可从[exiftool官网](https://exiftool.org/)下载：
 - 将解压后的`exiftool(-k).exe`文件复制到项目根目录下
 - 将"exiftool(-k).exe"重命名为"exiftool.exe"
 
@@ -55,46 +56,54 @@ python main.py
 ```
 
 ### 注意事项
-- 建议使用Python 3.8+版本
+- 需要 Python 3.10+ 版本（代码使用了 `dict | None` 等新语法）
 - 如遇到QFluentWidgets安装问题，可以尝试：`pip install PyQt-Fluent-Widgets`
 - 确保系统已安装Microsoft Visual C++ Redistributable
+
+## 下载 exe 版本
+在 [Releases](https://github.com/Piggywu981/Copyleft/releases) 页面下载 `Copyleft-<版本>-windows-x64.zip`，解压后双击 `Copyleft.exe` 即可运行，无需安装 Python。首次启动会自动在 exe 同目录释放配置、字体和相机 Logo；exiftool 会在需要时自动下载。
+
+## 自动发布
+推送 `v*` 格式的 tag 即可自动构建并发布 Release（见 `.github/workflows/release.yml`）：
+
+```bash
+git tag v2.6.0
+git push origin v2.6.0
+```
+
+GitHub Actions 会在 windows-latest 上用 PyInstaller 打包，产物 `Copyleft-<tag>-windows-x64.zip` 自动附到 Release。也可以在仓库的 Actions 页面手动触发（workflow_dispatch）做测试构建（不发布）。
 ---
 ## 使用说明
 
-### 基本设置标签页
+程序为单界面设计：左侧为设置面板，右侧为处理面板。
 
-#### 布局设置
+### 布局设置
 - **布局类型**：选择图片处理布局（水印、正方形、背景模糊等）
 - **Logo启用**：控制是否在图片上添加Logo
 
-#### 文字位置设置
+### 文字位置设置
 - **四个角落文字**：分别设置左上、右上、左下、右下角的文字内容
 - 支持的文字类型：相机型号、镜头信息、拍摄参数、日期时间、自定义文字等
+- **自定义文字**：当下方某处文字选择"自定义"时，显示在此输入框中填写的内容
 
-#### 自定义文字设置
-- **自定义文字**：设置自定义文字内容，可在文字位置中选择使用
-
-### 高级设置标签页
-
-#### 效果设置
+### 高级设置
 - **阴影效果**：为图片添加阴影效果
 - **白边效果**：为图片添加白色边框
 - **按比例填充**：保持原始图片比例进行填充
 - **等效焦距**：使用等效焦距信息
-
-#### 输出设置
 - **图片质量**：设置输出图片的质量（1-100）
 
-### 图片处理标签页
-
-#### 文件选择
+### 文件选择
 - **输入目录**：选择包含待处理图片的目录
 - **输出目录**：选择处理后的图片保存目录
 
-#### 处理控制
+### 处理控制
 - **开始处理**：启动图片处理流程
+- **停止**：停止处理（已在处理中的图片会处理完）
 - **进度显示**：实时显示处理进度
-- **处理日志**：显示详细的处理日志和错误信息
+
+### 处理统计
+- 实时显示排队数、正在处理数、已处理数和每秒处理数
 ---
 ## 功能特性
 
@@ -168,7 +177,7 @@ python main.py
 ### 核心模块
 - **core/entity**：实体类定义（图片容器、处理器链等）
 - **core/enums**：枚举常量定义
-- **ui**：PyQt5用户界面
+- **main.py**：PyQt5主窗口界面与处理线程
 - **utils**：工具函数
 
 ### 处理器链设计
@@ -191,9 +200,10 @@ Copyleft/
 │   └── enums/           # 枚举常量
 ├── fonts/               # 字体资源文件
 ├── logos/               # Logo图片资源
+├── assets/              # 界面用图片资源（打赏二维码等）
 ├── config.yaml          # 主配置文件
 ├── main.py              # 程序入口点（整合了PyQt5主窗口界面）
-├── init.py              # 初始化配置和菜单系统
+├── init.py              # 初始化配置、布局与处理器注册
 ├── utils.py             # 工具函数库
 └── requirements.txt     # Python依赖包列表
 ```
@@ -201,7 +211,7 @@ Copyleft/
 ### 扩展开发
 - 添加新的布局类型：在`init.py`中定义新的LayoutItem
 - 添加新的处理器：继承`ImageProcessor`基类
-- 修改界面：编辑`ui/main_window.py`文件
+- 修改界面：编辑`main.py`中的`MainWindow`类
 ---
 ## 许可证
 
@@ -223,10 +233,10 @@ Copyleft/
 
 如果这个项目对你有帮助，欢迎通过给我们买杯咖啡支持我们的工作！
 
-![core\enums\IMG_7190.JPG](https://github.com/Piggywu981/Copyleft/blob/main/core/enums/IMG_7190.JPG)
+![作者打赏二维码](https://github.com/Piggywu981/Copyleft/blob/main/assets/IMG_7190.JPG)
 
 ***以及原作者：***
-![core\enums\wechat.jpg](https://github.com/Piggywu981/Copyleft/blob/main/core/enums/wechat.jpg)
+![原作者打赏二维码](https://github.com/Piggywu981/Copyleft/blob/main/assets/wechat.jpg)
 
 ### 其他支持方式
 - ⭐ Star 这个项目
@@ -236,6 +246,15 @@ Copyleft/
 感谢您的支持！
 ---
 ## 更新日志
+
+### v2.6.0 更新日志
+- EXIF 读取双通道：优先 exiftool（可读取 Makernotes 中的 ISO、镜头信息），缺失或失败时自动回退 Pillow 解析，不再强依赖 exiftool
+- 启动时检测 exiftool，缺失时询问并自动下载安装
+- 拍摄方向自动摆正（EXIF Orientation），竖拍照片输出不再横竖颠倒
+- 拍摄时间缺失时回退为文件修改时间
+- 修复浏览按钮因缺少配置方法而崩溃的问题；修复空 Logo id 误匹配所有厂商的问题
+- 新增停止处理按钮；单张图片失败不再中断整体流程，错误统一弹窗汇总
+- 支持打包为单文件 exe，新增 GitHub Actions 自动发布：推送 v* 标签即自动构建并发布 Release
 
 ### v2.5 更新日志
 - 优化界面布局和用户体验，改进设置项的组织结构
