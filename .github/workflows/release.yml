@@ -45,9 +45,30 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path dist/Copyleft.exe -DestinationPath "Copyleft-${{ github.ref_name }}-windows-x64.zip"
 
+      - name: Extract release notes
+        shell: python
+        run: |
+          import io, os, re
+          tag = os.environ.get('GITHUB_REF_NAME', '')
+          repo = os.environ.get('GITHUB_REPOSITORY', '')
+          readme = io.open('README.md', encoding='utf-8').read()
+          m = re.search(r'###\s+' + re.escape(tag) + r'\s*更新日志\s*\n(.*?)(?=\n###|\n##|\Z)',
+                        readme, re.S)
+          if m:
+              changelog = m.group(1).strip()
+          else:
+              changelog = ('详情见 [README 更新日志](https://github.com/%s/blob/main/README.md#更新日志)。' % repo)
+          notes = '## 更新内容\n\n' + changelog
+          notes += '\n\n## 下载\n\n'
+          notes += '下载下方附件 `Copyleft-%s-windows-x64.zip`，解压后双击 `Copyleft.exe` 即可运行，无需安装 Python。\n\n' % tag
+          notes += '首次启动会自动在 exe 同目录释放配置、字体和相机 Logo；exiftool 会在需要时自动下载。'
+          io.open('release_notes.md', 'w', encoding='utf-8').write(notes + '\n')
+
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          name: Copyleft ${{ github.ref_name }}
+          body_path: release_notes.md
           files: Copyleft-*-windows-x64.zip
           generate_release_notes: true
