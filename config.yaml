@@ -41,7 +41,7 @@ layout:
       value: "PiggyWu\xA9"
   logo_enable: true
   logo_position: left
-  type: watermark_right_logo
+  type: custom_watermark
 logo:
   default:
     id: ''
