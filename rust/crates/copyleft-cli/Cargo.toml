@@ -1,0 +1,9 @@
+[package]
+name = "copyleft-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+copyleft-core = { workspace = true }
+clap = { workspace = true }
+image = { workspace = true }

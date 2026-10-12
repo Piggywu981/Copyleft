@@ -1,0 +1,12 @@
+[package]
+name = "copyleft-gui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+copyleft-core = { workspace = true }
+# 默认后端就是 glow（不链 wgpu/DirectX12），正是为了少一层体积。
+# 0.36.2 的 MSRV 是 1.95，本机 stable 是 1.94，所以钉在 0.35；
+# 字体栅格化在 0.34 起已换成 skrifa，.otf 加载能力不受影响。
+# 只开 glow：默认 features 会带进 wgpu + naga，实测白占好几 MB。
+eframe = { version = "0.35", default-features = false, features = ["glow", "default_fonts"] }

@@ -14,3 +14,7 @@ exiftool.exe
 
 exiftool_files/
 *.spec
+rust/target/
+rust/fixtures/*.png
+rust/fixtures/*.jpg
+rust/fixtures/*.json
