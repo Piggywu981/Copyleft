@@ -14,13 +14,13 @@
 - 图片输出与 Python 版**视觉近似**：输出宽高必须完全相等，各区块高度比例误差 < 1%，文字内容与排版位置一致；允许抗锯齿、模糊核与字距的细微像素差异。不追求逐像素 diff 为 0——`image` crate 的高斯核是真高斯核，Pillow 的 `GaussianBlur` 用 box 近似，两者不可能完全一致。
 - `config.yaml` 与旧版完全兼容：同一份配置文件两个程序都能读写。
 
-非目标：不做像素级一致、不支持 macOS/Linux 产物发布、不改水印文案规则、不新增布局类型、不重构 Python 侧代码。
+非目标：不做像素级一致、不支持 macOS/Linux 产物发布、不改水印文案规则、不新增布局类型、不重构 Python 侧代码。唯一允许的 Python 侧改动是 § 7.1 列出的两处 EXIF tag 数字修正——不修的话两边永远对不齐。
 
 阶段 1 用一个实现计划覆盖，内部按 `core 骨架 → exif 双通道 → 文字渲染 → watermark 布局 → CLI 对拍 → GUI → CI` 的顺序推进，前一步的产物是后一步的验收输入；其中「CLI 对拍」是继续做 GUI 的闸门，对拍不过不进入下一步。
 
 ## 2. 已核实的技术约束
 
-- `fonts/AlibabaPuHuiTi-2-45-Light.otf` 与 `-85-Bold.otf` 的 sfnt tag 是 `OTTO`（CFF 轮廓），Roboto 四个是 `glyf`。文字栅格化必须走支持 CFF 的栈：`rustybuzz`（shaping）+ `skrifa`（度量/轮廓）+ `swash`（覆盖栅格）。
+- `fonts/AlibabaPuHuiTi-2-45-Light.otf` 与 `-85-Bold.otf` 的 sfnt tag 是 `OTTO`（CFF 轮廓），Roboto 四个是 `glyf`。文字栅格化必须走支持 CFF 的栈：`rustybuzz`（shaping）+ `skrifa`（度量/轮廓）+ `tiny-skia`（填充），`swash` 作备选。
 - egui 0.34 起字体后端从 `ab_glyph` 换成 `skrifa` + `vello_cpu`，`.otf` 可直接作为 UI 字体加载，不需要为界面另备 TTF。
 - `kamadak-exif`（crates.io 名 `kamadak-exif`，不是 `exif`）只解析标准 IFD，**不解码 MakerNotes**（上游 issue #26 仍未完成）。Nikon 等机型存放在 MakerNotes 里的 ISO 与镜头信息拿不到，因此 exiftool 通道必须保留，回退链语义照搬现状。
 - `image` 0.25 支持写入 JPEG/PNG 的 EXIF（`ImageEncoder::set_exif_metadata`），但只是原样塞入字节，不能编辑字段；EXIF Orientation 需显式调用 `Decoder::orientation()` + `DynamicImage::apply_orientation()`，不会自动摆正。
@@ -168,7 +168,7 @@ watermark 主处理器的关键常量：`NORMAL_HEIGHT = 1000`；下方水印占
 `text::render(line, face, size, bold, color) -> RgbaImage`：
 
 1. `rustybuzz` 对单行文本 shaping（LTR，无换行；自定义文字可能含中日韩，需 CJK fallback 表）。
-2. `skrifa` 取字形轮廓与度量，`swash` 生成覆盖位图（CFF 与 glyf 同一条路径）。
+2. `skrifa` 取字形轮廓与度量，轮廓转成 `kurbo::BezPath` 后用 `tiny-skia` 抗锯齿填充（CFF 与 glyf 同一条路径）；`swash` 的 CPU 覆盖栅格列为备选，仅在 tiny-skia 的墨迹范围或耗时不达标时切换。
 3. 输出尺寸取 **ink bbox**（字形实际覆盖范围），对齐 Pillow `font.getbbox(content)` 的语义——布局里大量 `text_image.width/height` 参与留白计算，用 advance 而非 ink 会让水印条宽度系统性偏大。
 4. 空串按现状替换成三个空格再渲染。
 5. 颜色以 `fill` 乘进覆盖 alpha 后合成到 RGBA 缓冲。
@@ -179,9 +179,24 @@ watermark 主处理器的关键常量：`NORMAL_HEIGHT = 1000`；下方水印占
 
 读取（`exif/mod.rs`）保持现状的通道顺序：探测到 exiftool → 用 exiftool；其输出异常 → 记 warning 并回退 kamadak；都没有时返回空 `ExifFacts`，程序继续跑（只缺相机信息，不报错）。
 
-exiftool 探测沿用 `_EXIFTOOL_CANDIDATES` 语义：先看 `PATH`，再看 `./exiftool.exe`、`./exiftool/exiftool.exe`（非 Windows 为 `./exiftool`、`./exiftool/exiftool`）。调用形态与现状一致：`exiftool -d '%Y-%m-%d %H:%M:%S%3f%z' <path>`，解析「键: 值」行、键去空格与斜杠、值裁非 ASCII。自动下载保留：从 `https://exiftool.org/` 首页正则取 `exiftool-(\d+\.\d+)_64.zip`，失败用兜底版本 `13.59`，从 sourceforge 下载，解压时把主程序（排除名字含 `perl` 的 exe）落成 `exiftool.exe`、其余按去掉顶层目录后的路径平铺到 `exiftool_files/`。GUI 启动后延迟约 800ms 检查，缺失时弹询问框；非 Windows 只探测不下载。
+exiftool 的调用形态改为 `exiftool -j -d '%Y-%m-%d %H:%M:%S%3f%z' <path>`，用 `serde_json` 解析，不再复刻 Python 的文本解析。两条实测理由：`_exiftool_exif` 的 `line.split(':')` 在值含冒号时会切错；`-a -G1` 会同时给出 `IFD0:Model` 与 `ExifIFD:CameraModelName` 及一堆 `Composite:` 键，剥掉组名前缀后在扁平 map 里互相覆盖，所以只用默认 `-j`——其裸键与 Python 现有解析结果一致（`Make`/`CameraModelName`/`Lens`/`ISO`/`FNumber`/`ExposureTime`/`FocalLength`/`FocalLengthIn35mmFormat`/`DateTimeOriginal`/`Orientation`/`GPSPosition`）。镜头字段的取值顺序必须是 `LensModel → Lens → LensID`：实测这台 Nikon 只有 MakerNotes 派生的裸键 `Lens`（值 `70-200mm f/2.8`），把 `LensID` 排前面会错拿成长名 `AF-S Nikkor 70-200mm f/2.8G ED VR II`。值仍按现状过滤非 ASCII 字符。
+
+exiftool 探测沿用 `_EXIFTOOL_CANDIDATES` 语义：先看 `PATH`，再看 `./exiftool.exe`、`./exiftool/exiftool.exe`（非 Windows 为 `./exiftool`、`./exiftool/exiftool`）。自动下载保留：从 `https://exiftool.org/` 首页正则取 `exiftool-(\d+\.\d+)_64.zip`，失败用兜底版本 `13.59`，从 sourceforge 下载，解压时把主程序（排除名字含 `perl` 的 exe）落成 `exiftool.exe`、其余按去掉顶层目录后的路径平铺到 `exiftool_files/`。GUI 启动后延迟约 800ms 检查，缺失时弹询问框；非 Windows 只探测不下载。这三项都归计划 C。
 
 写出：`apply_orientation()` 已把方向烘焙进像素，保存前必须去掉 Orientation 标签，否则查看器二次旋转（现状 `image_container.save` 的做法）。`exif/tiff.rs` 在原始 APP1 载荷上原地操作：解析 TIFF 头取字节序 → IFD0 条目数与目录 → 找 tag `0x0112` → 把该条目之后整体上移一条、条目数减一 → 修正「下一个 IFD 偏移」及受影响子 IFD 的指针。MakerNote（tag `0x927c`）字节整体不动，因此 Nikon 信息不丢。JPEG 用 `JpegEncoder::set_exif_metadata`，PNG 同样写 eXIf。拿 `input/_DSC7969.JPG` 做单测：打完补丁后 exiftool 仍读回完整 EXIF 且无 Orientation。
+
+### 7.1 Python 侧两处 EXIF tag 修正（前置）
+
+实测 `input/_DSC7969.JPG`：ISO 存在 tag 34855（0x8827），值为 800；而 `utils.py:184-185` 读的是十进制 `8827`（0x227B），该 tag 不存在。结果是**没有 exiftool 时 Python 版永远输出 `ISO--`**。同文件 `utils.py:163-164` 用 `42032`（0xA430 = CameraOwnerName）当 LensMake，正确应是 `42035`（0xA433）。
+
+Rust 侧按语义正确的 tag 读，因此必须先把这两行改对，否则对拍基线本身就是错的：
+
+- `utils.py:184-185`：`8827` → `34855`
+- `utils.py:163-164`：`42032` → `42035`
+
+改动只碰这两个数字，不动其它逻辑，改完立刻用这张 Nikon 样张验证 Pillow 通道能出 `ISO800`。此修正也意味着 v2.6.0 的一个既有用户可见 bug 顺带解决（无 exiftool 时 ISO 不再显示 `--`）。
+
+
 
 ## 8. GUI 与并发
 
@@ -212,12 +227,12 @@ exiftool 探测沿用 `_EXIFTOOL_CANDIDATES` 语义：先看 `PATH`，再看 `./
 
 ## 11. 依赖清单
 
-`image` 0.25、`kamadak-exif` 0.6、`rustybuzz`、`skrifa`、`swash`、`serde` + `serde_yaml` 0.9、`crossbeam-channel`、`egui`/`eframe`（glow 后端，减小体积）、`rfd`、`thiserror`、`tracing` + `tracing-subscriber` + `tracing-appender`、`ureq` + `zip`（exiftool 自动下载）、`chrono`（日期格式化与解析）、`regex`（exiftool 输出与版本号解析）。
+`image` 0.25、`kamadak-exif` 0.6、`rustybuzz`、`skrifa`、`tiny-skia` + `kurbo`（`swash` 作备选）、`serde` + `serde_yaml` 0.9、`serde_json`（exiftool 的 `-j` 输出）、`crossbeam-channel`、`egui`/`eframe`（glow 后端，减小体积）、`rfd`、`thiserror`、`tracing`（core 里统一用它的宏）+ `tracing-subscriber` + `tracing-appender`（二进制里接三份日志文件）、`ureq` + `zip`（exiftool 自动下载）、`chrono`（日期格式化与解析）、`regex`（exiftool 输出与版本号解析）。
 
 ## 12. 已知风险
 
-1. 文字 ink bbox 与 Pillow `getbbox` 不完全一致，会让水印条宽度出现偏差，极端情况下超出 § 9 定的 1% 容差。缓解：先按 swash 覆盖范围取 bbox，对拍超容差再补 Pillow 同源的侧 bearings（left/right bearing）修正。
-2. `swash` 的 CPU 覆盖栅格（`scale::Mask`）若对 CFF 的 hinting 处理不理想，回退到 `tiny-skia` 填充 `skrifa` 轮廓路径。
+1. 文字 ink bbox 与 Pillow `getbbox` 不完全一致，会让水印条宽度出现偏差，极端情况下超出 § 9 定的 1% 容差。缓解：先按 tiny-skia 填充结果的墨迹范围取 bbox，对拍超容差再补 Pillow 同源的侧 bearings（left/right bearing）修正。
+2. `tiny-skia` + `skrifa` 轮廓路径若在 CFF 提示或耗时上不达标，回退到 `swash` 的 CPU 覆盖栅格（`scale::Mask`）。两条路都封在 `text/` 内部，切换不动调用点。
 3. 手写 TIFF 条目删除有踩边界情况的风险（子 IFD 偏移、大端序）。缓解：只做「删一条 + 前移 + 修偏移」的最小改动，配 `fixtures` 上 exiftool 回读断言。
 4. 阶段 1 未实现的 5 个布局 id 会出现在用户带过来的 `config.yaml` 里。行为已在 § 5（CLI 显式报错）与 § 8（GUI 占位不可选、不写回）定义，不留未定义路径。
 5. `serde_yaml` 0.9 已被作者归档、不再更新。功能上够用，但如果后续要写注释或控键序就得换分叉（`serde_yml`/`serde_norway`）。缓解：YAML 读写集中在 `config.rs` 一个模块，替换面可控。
