@@ -160,8 +160,8 @@ def _pillow_exif(path) -> dict:
         exif_dict['Make'] = _tag_str(exif.get(271))
     if _tag_str(exif.get(272)):
         exif_dict['CameraModelName'] = _tag_str(exif.get(272))
-    if _tag_str(exif_ifd.get(42032)):
-        exif_dict['LensMake'] = _tag_str(exif_ifd.get(42032))
+    if _tag_str(exif_ifd.get(42035)):  # 0xA433 LensMake（42032 是 CameraOwnerName）
+        exif_dict['LensMake'] = _tag_str(exif_ifd.get(42035))
     if _tag_str(exif_ifd.get(42036)):
         exif_dict['LensModel'] = _tag_str(exif_ifd.get(42036))
     dto = _tag_str(exif_ifd.get(36867))
@@ -181,8 +181,8 @@ def _pillow_exif(path) -> dict:
         exif_dict['FNumber'] = f'{float(exif_ifd.get(33437)):.1f}'
     if exif_ifd.get(33434) is not None:
         exif_dict['ExposureTime'] = _fmt_exposure_time(exif_ifd.get(33434))
-    if exif_ifd.get(8827) is not None:
-        exif_dict['ISO'] = str(int(exif_ifd.get(8827)))
+    if exif_ifd.get(34855) is not None:  # 0x8827 PhotographicSensitivity，不是十进制 8827
+        exif_dict['ISO'] = str(int(exif_ifd.get(34855)))
     if exif.get(274) in _ORIENTATION_NAMES:
         exif_dict['Orientation'] = _ORIENTATION_NAMES[exif.get(274)]
 
