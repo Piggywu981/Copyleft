@@ -702,8 +702,8 @@ impl Config {
 
     /// config.py: get_font_padding_level()——两档各自钳到 1..=3 后求和
     pub fn font_padding_level(&self) -> u32 {
-        let clamp = |v: u8| u32::from((1..=3).contains(&v));
-        clamp(self.base.bold_font_size) + clamp(self.base.font_size) + 2
+        let clamped = |v: u8| if (1..=3).contains(&v) { v as u32 } else { 1 };
+        clamped(self.base.bold_font_size) + clamped(self.base.font_size)
     }
 
     /// config.py: get_white_margin_width()
@@ -746,7 +746,7 @@ impl Config {
 }
 ```
 
-`font_padding_level()` 的 `+2` 是把「钳到 1..=3 后为 1」折算成布尔求和的写法，语义等价于 Python 的 `clamp(v)` 后相加；测试用真实配置（两档都是 1）断言结果为 `2`，用越界配置也断言 `2`，两条路径都锁住。
+`font_padding_level()` 是 Python 的「越界取 1，否则取原值，再相加」，**不是**布尔计数——写成 `u32::from(in范围) + 2` 在两档都为 1 时会算出 4。真实配置两档都是 1，期望值 2；越界配置同样期望 2。两条断言都在测试里，缺一边都发现不了这个错。
 
 - [ ] **步骤 4：跑测试验证通过**
 
