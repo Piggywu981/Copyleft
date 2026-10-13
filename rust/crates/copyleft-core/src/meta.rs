@@ -169,7 +169,7 @@ fn megapixel(w: u32, h: u32) -> String {
 
 fn rotated_dims(w: u32, h: u32, orientation: u16) -> (u32, u32) {
     match orientation {
-        5 | 6 | 7 | 8 => (h, w),
+        5..=8 => (h, w),
         _ => (w, h),
     }
 }

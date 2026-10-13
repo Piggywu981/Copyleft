@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use copyleft_core::exif::{tool, ExiftoolBinary};
 use copyleft_core::keys::TextKey;
 use copyleft_core::meta::{geo_from_position, parse_photo_date, ImageMeta};
@@ -15,7 +13,7 @@ fn standard_channel() -> ExiftoolBinary {
     ExiftoolBinary(None)
 }
 
-fn meta_with(tool: &dyn copyleft_core::exif::ExifTool, eq: bool, p: &PathBuf) -> ImageMeta {
+fn meta_with(tool: &dyn copyleft_core::exif::ExifTool, eq: bool, p: &std::path::Path) -> ImageMeta {
     ImageMeta::load_with(p, eq, tool).unwrap()
 }
 
