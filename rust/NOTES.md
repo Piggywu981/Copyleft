@@ -42,6 +42,42 @@
 
 （计划 A 任务 7 落地时填写：取整规则、CFF 栅格化实测结果、耗时）
 
+## 文字后端选型（任务 7-8，探针实测）
+
+**结论：`rustybuzz` 0.20.1 shaping + `skrifa` 0.34 取轮廓 + `tiny-skia` 0.11 直接填充。**
+`swash` 备选没启用；`kurbo` 原计划要用作中间路径格式，实测 tiny-skia 的 `PathBuilder`
+可以直接接收 skrifa 的 `OutlinePen` 回调，于是整个依赖去掉了。
+
+探针实测数据（`fonts/AlibabaPuHuiTi-2-45-Light.otf`，CFF/OTTO）：轮廓能正常绘制，
+"Nikon Z7" 8 个字形产出 75 条路径命令，所以规格 § 12 风险 2（CFF 栅格化失败）没发生。
+
+### 度量取整规则 = ceil
+
+`skrifa::metrics::Metrics::new(font, Size::new(px), location)` 返回的 `ascent`/`descent`
+已按字号缩放。Pillow `getmetrics()` 对比：
+
+| 字体 @ 字号 | skrifa raw | 期望(asc,desc) | ceil | round | floor |
+|---|---|---|---|---|---|
+| PuHuiTi Light @240 | 254.4, -81.6 | (255, 82) | **(255, 82)** | (254, 82) | (254, 81) |
+| PuHuiTi Bold @260 | 275.6, -88.4 | (276, 89) | **(276, 89)** | (276, 88) | (275, 88) |
+| Roboto Regular @240 | 222.66, -58.59 | (223, 59) | **(223, 59)** | (223, 59) | (222, 58) |
+| Roboto Medium @260 | 241.21, -63.48 | (242, 64) | **(242, 64)** | (241, 63) | (241, 63) |
+
+ceil 命中全部 8 个数字，round 只中 5 个、floor 只中 2 个。图内基线用**未取整**的
+`ascent`（254.4），只在最后算高度时 ceil——先把基线取整再叠墨迹会整体偏 1 px。
+
+### 与 Pillow 的两个既有差异（规格 § 12 风险 1 的量化）
+
+| 串 | Rust 宽 | Pillow 宽 | 差 |
+|---|---|---|---|
+| `"Nikon Z7"` Light@240 | 974 | 977 | −0.31% |
+| `"Nikon Z7"` Bold@260 | 1123 | 1130 | −0.62% |
+
+原因是 rustybuzz/skrifa 用未提示的推进量，Pillow 用 FreeType 提示后的 per-glyph 进位，
+差值随字号增长，所以固定像素阈值不成立，测试改成 **1% 相对容差**（与规格 § 9 的区块
+比例容差对齐）。高度方向实测差 1 px（257 vs 258，0.4%），容差定 ±1。
+如果计划 B 的整图目视对拍出现可察觉的错位，再考虑 `DrawSettings::hinted`。
+
 ## 计划 A 对拍结果
 
 （计划 A 任务 9 落地时填写：每条 DIFF 的判定）

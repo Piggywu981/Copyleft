@@ -13,7 +13,6 @@ exif = { workspace = true }
 rustybuzz = { workspace = true }
 skrifa = { workspace = true }
 tiny-skia = { workspace = true }
-kurbo = { workspace = true }
 regex = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }

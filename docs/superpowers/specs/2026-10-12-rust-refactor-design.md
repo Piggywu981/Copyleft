@@ -168,7 +168,7 @@ watermark 主处理器的关键常量：`NORMAL_HEIGHT = 1000`；下方水印占
 `text::render(line, face, size, bold, color) -> RgbaImage`：
 
 1. `rustybuzz` 对单行文本 shaping（LTR，无换行；自定义文字可能含中日韩，需 CJK fallback 表）。
-2. `skrifa` 取字形轮廓与度量，轮廓转成 `kurbo::BezPath` 后用 `tiny-skia` 抗锯齿填充（CFF 与 glyf 同一条路径）；`swash` 的 CPU 覆盖栅格列为备选，仅在 tiny-skia 的墨迹范围或耗时不达标时切换。
+2. `skrifa` 取字形轮廓与度量，轮廓命令直接喂给 `tiny-skia` 的 `PathBuilder` 后抗锯齿填充（实测 CFF 与 glyf 走同一条路径都成立）；`swash` 的 CPU 覆盖栅格列为备选，本次没启用。
 3. 输出尺寸取 **ink bbox**（字形实际覆盖范围），对齐 Pillow `font.getbbox(content)` 的语义——布局里大量 `text_image.width/height` 参与留白计算，用 advance 而非 ink 会让水印条宽度系统性偏大。
 4. 空串按现状替换成三个空格再渲染。
 5. 颜色以 `fill` 乘进覆盖 alpha 后合成到 RGBA 缓冲。
@@ -227,7 +227,7 @@ Rust 侧按语义正确的 tag 读，因此必须先把这两行改对，否则�
 
 ## 11. 依赖清单
 
-`image` 0.25、`kamadak-exif` 0.6、`rustybuzz`、`skrifa`、`tiny-skia` + `kurbo`（`swash` 作备选）、`serde` + `serde_yaml` 0.9、`serde_json`（exiftool 的 `-j` 输出）、`crossbeam-channel`、`egui`/`eframe`（glow 后端，减小体积）、`rfd`、`thiserror`、`tracing`（core 里统一用它的宏）+ `tracing-subscriber` + `tracing-appender`（二进制里接三份日志文件）、`ureq` + `zip`（exiftool 自动下载）、`chrono`（日期格式化与解析）、`regex`（exiftool 输出与版本号解析）。
+`image` 0.25、`kamadak-exif` 0.6、`rustybuzz`、`skrifa`、`tiny-skia`（`swash` 作备选未启用；原计划的 `kurbo` 实测不需要，轮廓可直接进 `PathBuilder`）、`serde` + `serde_yaml` 0.9、`serde_json`（exiftool 的 `-j` 输出）、`crossbeam-channel`、`egui`/`eframe`（0.35 + glow-only，见 § 12 风险 6）、`rfd`、`thiserror`、`tracing`（core 里统一用它的宏）+ `tracing-subscriber` + `tracing-appender`（二进制里接三份日志文件）、`ureq` + `zip`（exiftool 自动下载）、`chrono`（日期格式化与解析）、`regex`（exiftool 输出与版本号解析）。
 
 ## 12. 已知风险
 
@@ -236,3 +236,4 @@ Rust 侧按语义正确的 tag 读，因此必须先把这两行改对，否则�
 3. 手写 TIFF 条目删除有踩边界情况的风险（子 IFD 偏移、大端序）。缓解：只做「删一条 + 前移 + 修偏移」的最小改动，配 `fixtures` 上 exiftool 回读断言。
 4. 阶段 1 未实现的 5 个布局 id 会出现在用户带过来的 `config.yaml` 里。行为已在 § 5（CLI 显式报错）与 § 8（GUI 占位不可选、不写回）定义，不留未定义路径。
 5. `serde_yaml` 0.9 已被作者归档、不再更新。功能上够用，但如果后续要写注释或控键序就得换分叉（`serde_yml`/`serde_norway`）。缓解：YAML 读写集中在 `config.rs` 一个模块，替换面可控。
+6. `eframe` 0.36.2 起 MSRV 是 rustc 1.95，高于本机 stable 1.94，所以钉在 0.35；同时必须 `default-features = false` 只开 `glow`+`default_fonts`，否则默认 features 拉进 `wgpu`+`naga`，空窗口 exe 从 7,681,024 涨到 13,933,568 字节。升级 eframe 需要先升级全局 Rust 工具链，属独立决定。

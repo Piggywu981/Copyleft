@@ -17,7 +17,6 @@ exif = { package = "kamadak-exif", version = "0.6" }
 rustybuzz = "0.20"
 skrifa = "0.34"
 tiny-skia = "0.11"
-kurbo = "0.11"
 regex = "1"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 clap = { version = "4", features = ["derive"] }
