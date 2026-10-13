@@ -661,7 +661,7 @@ class MainWindow(FluentWindow):
         # 添加版本和版权标识
         footer_layout = QHBoxLayout()
         footer_layout.addStretch()
-        version_label = BodyLabel("Copyleft v3.0.0 © 2026 PiggyWu981")
+        version_label = BodyLabel("Copyleft v2.5 © 2025 PiggyWu981")
         version_label.setAlignment(Qt.AlignRight | Qt.AlignBottom)
         footer_layout.addWidget(version_label)
         main_layout.addLayout(footer_layout)
@@ -848,7 +848,7 @@ def main():
 
         # 设置应用程序信息
         app.setApplicationName("Semi-Utils")
-        app.setApplicationVersion("3.0.0")
+        app.setApplicationVersion("2.5")
         app.setOrganizationName("PiggyWu981")
 
         # 设置Fluent Design主题
