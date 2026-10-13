@@ -38,10 +38,6 @@
    - `ImageMeta::load` 原来写死通道，测试无法指定；改成 `load_with(path, eq, &dyn ExifTool)`，
      `load` 只是它的便捷封装。
 
-## 文字后端选型
-
-（计划 A 任务 7 落地时填写：取整规则、CFF 栅格化实测结果、耗时）
-
 ## 文字后端选型（任务 7-8，探针实测）
 
 **结论：`rustybuzz` 0.20.1 shaping + `skrifa` 0.34 取轮廓 + `tiny-skia` 0.11 直接填充。**
@@ -78,6 +74,26 @@ ceil 命中全部 8 个数字，round 只中 5 个、floor 只中 2 个。图内
 比例容差对齐）。高度方向实测差 1 px（257 vs 258，0.4%），容差定 ±1。
 如果计划 B 的整图目视对拍出现可察觉的错位，再考虑 `DrawSettings::hinted`。
 
-## 计划 A 对拍结果
+## 计划 A 对拍结果（任务 9，2026-10-13）
 
-（计划 A 任务 9 落地时填写：每条 DIFF 的判定）
+`bash rust/tests/parity.sh`：5 张样张 × 2 种焦距模式 = 10 组，每组 18 行逐行比对。
+
+| 通道 | 结果 |
+|---|---|
+| exiftool（`meta --exiftool ../exiftool.exe`） | 10/10 OK |
+| Standard（临时把 `exiftool.exe` 移出仓库根后重跑） | 10/10 OK |
+
+过程中查出的三件事，记在这里免得后来人再踩：
+
+1. **行尾差异会伪装成内容差异。** Python 在 Windows 上 `print()` 写 `\r\n`，Rust `println!` 写 `\n`，
+   第一版比对每一行都 DIFF。必须 `diff --strip-trailing-cr`。
+2. **通道要对齐。** CLI 从 `rust/` 下跑时 `locate()` 找不到仓库根的 `exiftool.exe`，会静默走
+   Standard，而 Python 看的是自己的 `EXIFTOOL_AVAILABLE`，两边比的是不同通道。
+   解决：`copyleft-cli meta --exiftool <path>` 显式指定，脚本负责传。
+3. **「使用等效焦距」在旧版里是死配置。** `image_container.py` 在构造时就把 Param 缓存进
+   `_param_dict`，而 `main.py:101` 是构造之后才调 `is_use_equivalent_focal_length()`，
+   勾选框从来没效果（实测置标志后仍是 `145.0mm  f/2.8  1/500s  ISO800`）。
+   Rust 按语义实时计算，于是 4 组 `--eq` 比对 DIFF。
+   **经伙伴决定：两边都修，让勾选生效**——Python 侧 `get_attribute_str` 里 Param 走实时计算。
+   影响：新版输出在等效焦距开启时与旧版 Release 不同（多数机型 50mm 会变成 75mm 这类实际差异），
+   发布说明要写明；规格 § 1「不改水印文案规则」这条非目标为此开了例外。

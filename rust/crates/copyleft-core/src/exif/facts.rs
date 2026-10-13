@@ -11,6 +11,17 @@ pub enum ExifSource {
     Empty,
 }
 
+impl ExifSource {
+    /// 对拍输出用的稳定名字，与 Python 侧 exif_parity.py 的写法一致。
+    pub fn name(self) -> &'static str {
+        match self {
+            ExifSource::Exiftool => "Exiftool",
+            ExifSource::Standard => "Standard",
+            ExifSource::Empty => "Empty",
+        }
+    }
+}
+
 /// 显示就绪的 EXIF：两个通道都填它，下游不再处理格式差异。
 ///
 /// 字段存的是**最终显示串**而不是数值，因为两条通道给的同一条信息形态不同

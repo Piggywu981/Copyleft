@@ -177,6 +177,11 @@ class ImageContainer(object):
         if element is None:
             return ''
         name = element.get_name()
+        if name == PARAM_VALUE:
+            # Param 依赖 use_equivalent_focal_length，而该标志是在构造之后才置位的
+            # （main.py 先 ImageContainer(path) 再 is_use_equivalent_focal_length），
+            # 所以这里必须实时算，读 __init__ 的缓存会让勾选框失效。
+            return self.get_param_str()
         if name in self._param_dict:
             return self._param_dict[name]
         if name == CUSTOM_VALUE:
