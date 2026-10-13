@@ -19,6 +19,7 @@ fn meta_with(tool: &dyn copyleft_core::exif::ExifTool, eq: bool, p: &std::path::
 
 #[test]
 fn exiftool_channel_matches_python() {
+    copyleft_core::require_samples!();
     let Some(tool) = exiftool_channel() else {
         eprintln!("仓库根没有 exiftool.exe，跳过");
         return;
@@ -70,6 +71,7 @@ fn exiftool_channel_matches_python() {
 
 #[test]
 fn standard_channel_matches_python_fallback_and_differs_documentably() {
+    copyleft_core::require_samples!();
     let tool = standard_channel();
     let m = meta_with(&tool, false, &photo("_DSC7969.JPG"));
     assert_eq!(
@@ -95,6 +97,7 @@ fn standard_channel_matches_python_fallback_and_differs_documentably() {
 
 #[test]
 fn dimensions_and_orientation() {
+    copyleft_core::require_samples!();
     let m = ImageMeta::load(&photo("_DSC7969.JPG"), false).unwrap();
     assert_eq!((m.original_width, m.original_height), (7360, 4912));
     assert_eq!(m.orientation, 1);
@@ -110,6 +113,7 @@ fn dimensions_and_orientation() {
 
 #[test]
 fn missing_exif_falls_back_to_file_mtime() {
+    copyleft_core::require_samples!();
     let m = ImageMeta::load(&fixture("no_exif.png"), false).unwrap();
     let date = m.text(TextKey::Date, None);
     assert_eq!(

@@ -29,3 +29,25 @@ pub fn font(name: &str) -> PathBuf {
     assert!(p.exists(), "仓库 fonts/ 下没有 {name}");
     p
 }
+
+/// `input/` 的真实照片和 `rust/fixtures/` 的派生样张都被 .gitignore 排除，
+/// CI 的检出里不存在。依赖它们的测试必须先问一句再跳过，否则会 panic。
+pub fn samples_available() -> bool {
+    repo_root().join("input/_DSC7969.JPG").exists() && fixture_dir_exists()
+}
+
+fn fixture_dir_exists() -> bool {
+    repo_root().join("rust/fixtures/rotated.jpg").exists()
+}
+
+#[macro_export]
+macro_rules! require_samples {
+    () => {
+        if !copyleft_core::test_support::samples_available() {
+            eprintln!(
+                "跳过：input/ 或 rust/fixtures/ 的样张不在检出里（两者都被 .gitignore 排除）。"
+            );
+            return;
+        }
+    };
+}

@@ -4,6 +4,7 @@ use copyleft_core::test_support::{fixture, photo};
 
 #[test]
 fn nikon_facts_via_standard_channel() {
+    copyleft_core::require_samples!();
     let f = standard::read(&photo("_DSC7969.JPG")).unwrap();
     assert_eq!(f.make, "NIKON CORPORATION");
     assert_eq!(f.model, "NIKON D810");
@@ -26,12 +27,14 @@ fn nikon_facts_via_standard_channel() {
 
 #[test]
 fn png_without_exif_yields_empty_facts() {
+    copyleft_core::require_samples!();
     let f = standard::read(&fixture("no_exif.png")).unwrap();
     assert_eq!(f, ExifFacts::empty(ExifSource::Standard));
 }
 
 #[test]
 fn png_with_exif_reads_back_iso() {
+    copyleft_core::require_samples!();
     let f = standard::read(&fixture("with_exif.png")).unwrap();
     assert_eq!(f.iso, "800", "PNG 里的 EXIF 同样要能读");
     assert_eq!(f.model, "NIKON D810");
@@ -51,6 +54,7 @@ fn exposure_formatting_matches_pillow_branches() {
 
 #[test]
 fn rotated_fixture_carries_orientation_six() {
+    copyleft_core::require_samples!();
     let f = standard::read(&fixture("rotated.jpg")).unwrap();
     assert_eq!(f.orientation, Some(6), "派生样张必须真的带上 6");
 }

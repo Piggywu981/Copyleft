@@ -74,6 +74,7 @@ fn orientation_text_maps_to_numbers_like_pillow_names() {
 
 #[test]
 fn real_binary_matches_python_ground_truth() {
+    copyleft_core::require_samples!();
     let Some(bin) = tool::locate() else {
         eprintln!("本机无 exiftool，跳过");
         return;

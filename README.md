@@ -1,8 +1,10 @@
-# Semi-Utils - PyQt5 GUI版本 v2.6.0
+# Copyleft v3.0.0
 ---
 ## 项目背景
 
-本项目是基于开源项目 **semi-utils** 迁移而来的PyQt5 GUI版本。原项目是一个命令行图片处理工具，主要用于为照片添加水印、阴影、白边等效果，支持多种布局和自定义设置。
+本项目是基于开源项目 **semi-utils** 迁移而来的图片处理工具。v2.x 是 PyQt5 图形界面版；
+**从 v3.0.0 起，发布产物改为 Rust 重写的引擎与界面**，Python 版停止打包发布。
+
 
 原项目信息：
 - 项目名称：Semi-Utils
@@ -61,17 +63,31 @@ python main.py
 - 确保系统已安装Microsoft Visual C++ Redistributable
 
 ## 下载 exe 版本
-在 [Releases](https://github.com/Piggywu981/Copyleft/releases) 页面下载 `Copyleft-<版本>-windows-x64.zip`，解压后双击 `Copyleft.exe` 即可运行，无需安装 Python。首次启动会自动在 exe 同目录释放配置、字体和相机 Logo；exiftool 会在需要时自动下载。
+在 [Releases](https://github.com/Piggywu981/Copyleft/releases) 页面下载 `Copyleft-<版本>-windows-x64.zip`，解压后双击 `Copyleft.exe` 即可运行，无需安装 Python 或 Rust 运行时（单文件，不附带 DLL）。
+
+**v3.0.0 的功能范围（请先读这条再下载）**：本版发布的是 Rust 重写的**第一阶段**——EXIF 双通道读取、16 个文字项、文字栅格化与度量对齐都已经完成并通过与 Python 版的逐行对拍；但布局处理器（水印/白边等）与图形界面尚未移植，所以这个 exe 打开是一个不含处理功能的窗口。需要完整水印功能请继续使用 **v2.6.0**。
 
 ## 自动发布
 推送 `v*` 格式的 tag 即可自动构建并发布 Release（见 `.github/workflows/release.yml`）：
 
 ```bash
-git tag v2.6.0
-git push origin v2.6.0
+git tag v3.0.0
+git push origin v3.0.0
 ```
 
-GitHub Actions 会在 windows-latest 上用 PyInstaller 打包，产物 `Copyleft-<tag>-windows-x64.zip` 自动附到 Release。也可以在仓库的 Actions 页面手动触发（workflow_dispatch）做测试构建（不发布）。
+GitHub Actions 会在 windows-latest 上用 `cargo build --release -p copyleft-gui` 打包，
+构建前强制 `cargo fmt --check`、`cargo clippy -- -D warnings` 和 `cargo test`，任一不过就不出产物。
+也可以在仓库的 Actions 页面手动触发（workflow_dispatch）做测试构建（不发布）。
+
+## 用 Rust 从源码构建
+```bash
+cd rust
+cargo build --release -p copyleft-gui   # 产物在 rust/target/release/copyleft-gui.exe
+cargo test                              # 需要本地有 input/ 样张时才跑全量对拍测试
+cargo run -p copyleft-cli -- meta ../input/_DSC7969.JPG
+```
+工程决策、体积基线、字体度量选型与对拍结果都记在 `rust/NOTES.md`；
+设计与分阶段计划见 `docs/superpowers/specs/` 和 `docs/superpowers/plans/`。
 ---
 ## 使用说明
 
@@ -246,6 +262,13 @@ Copyleft/
 感谢您的支持！
 ---
 ## 更新日志
+
+### v3.0.0 更新日志
+- **发布产物切换到 Rust**：`rust/` 下新增 copyleft-core / copyleft-cli / copyleft-gui 三个 crate，Release 不再用 PyInstaller 打包 Python。空窗口 exe 实测 7.7 MB，对比 v2.6.0 的 123,427,746 字节。
+- **已完成的第一阶段（引擎地基）**：config.yaml 零改动兼容读写；EXIF 双通道（exiftool 子进程 + kamadak-exif，含缺失时的回退）；16 个文字项；文字栅格化（rustybuzz + skrifa + tiny-skia，支持本项目使用的 CFF/`.otf` 中文字体）。以上在 5 张样张、两条通道、共 20 组比对中与 Python 版逐行一致。
+- 修复：未安装 exiftool 时 ISO 永远显示 `--`。内置解析通道把 tag 写成了十进制 `8827`，正确是 `34855`（0x8827）；LensMake 同理从 `42032` 纠正为 `42035`。
+- 修复：**「使用等效焦距」此前完全无效**——参数串在对象构造时就被缓存，而界面是在构造之后才置标志位。现在两边都改成实时计算。⚠️ 这会让输出文字与 v2.6.0 不同（例如 `50mm` 变成等效的 `75mm`），如果你依赖旧输出请注意。
+- 已知范围限制：布局处理器（水印、白边、阴影、背景模糊等）与图形界面尚未移植，因此本版 exe 不含图片处理功能，需要完整功能请用 v2.6.0。
 
 ### v2.6.0 更新日志
 - EXIF 读取双通道：优先 exiftool（可读取 Makernotes 中的 ISO、镜头信息），缺失或失败时自动回退 Pillow 解析，不再强依赖 exiftool

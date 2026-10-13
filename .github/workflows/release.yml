@@ -15,35 +15,52 @@ concurrency:
 
 jobs:
   build:
-    name: Build Windows exe
+    name: Build Windows exe (Rust)
     runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      - name: Install dependencies
+      # 只用 rustup 官方组件，不引入第三方 action；cargo 版本与本地开发保持一致的 stable。
+      - name: Setup Rust
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller
+          rustup toolchain install stable --profile minimal
+          rustup component add clippy rustfmt --toolchain stable
+          rustup default stable
+          cargo --version
 
-      - name: Build executable
-        run: >
-          pyinstaller --noconfirm --clean --onefile --windowed --name Copyleft
-          --add-data "assets;assets"
-          --add-data "fonts;fonts"
-          --add-data "logos;logos"
-          --add-data "config.yaml;."
-          --collect-all qfluentwidgets
-          main.py
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
 
+      # 三道门：格式、clippy（-D warnings 把告警当错误）、测试。
+      # 样张（input/ 与 rust/fixtures/）不入仓库，依赖样张的测试会在
+      # require_samples! 里跳过，这里跑的是不依赖样张的那部分。
+      - name: Lint and test
+        working-directory: rust
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
+      - name: Build release executable
+        working-directory: rust
+        run: cargo build --release -p copyleft-gui
+
+      # 产物名沿用 Copyleft.exe，避免老用户按 README 找不到文件。
       - name: Package
         shell: pwsh
-        run: Compress-Archive -Path dist/Copyleft.exe -DestinationPath "Copyleft-${{ github.ref_name }}-windows-x64.zip"
+        run: |
+          New-Item -ItemType Directory -Path out | Out-Null
+          Copy-Item rust/target/release/copyleft-gui.exe out/Copyleft.exe
+          Get-Item out/Copyleft.exe | Select-Object Name, Length
+          Compress-Archive -Path out/Copyleft.exe -DestinationPath "Copyleft-${{ github.ref_name }}-windows-x64.zip"
 
       - name: Extract release notes
         shell: python
@@ -60,8 +77,14 @@ jobs:
               changelog = ('详情见 [README 更新日志](https://github.com/%s/blob/main/README.md#更新日志)。' % repo)
           notes = '## 更新内容\n\n' + changelog
           notes += '\n\n## 下载\n\n'
-          notes += '下载下方附件 `Copyleft-%s-windows-x64.zip`，解压后双击 `Copyleft.exe` 即可运行，无需安装 Python。\n\n' % tag
-          notes += '首次启动会自动在 exe 同目录释放配置、字体和相机 Logo；exiftool 会在需要时自动下载。'
+          notes += '下载下方附件 `Copyleft-%s-windows-x64.zip`，解压后双击 `Copyleft.exe` 即可运行，' % tag
+          notes += '单文件、无附带 DLL。\n\n'
+          notes += ('> ⚠️ v3.0.0 起发布产物是 Rust 重写的第一阶段：EXIF 与文字引擎已就绪并通过与 Python 版'
+                    '的逐行对拍，但布局与图形界面尚未移植，本版 exe 不含图片处理功能。'
+                    '需要完整水印功能请下载 v2.6.0。')
+          notes += '\n\n## 体积\n\n'
+          notes += '- v2.6.0（PyInstaller + Qt）：123,427,746 字节\n'
+          notes += '- 本版 exe 实际大小见 Workflow 日志的 Package 步骤\n'
           io.open('release_notes.md', 'w', encoding='utf-8').write(notes + '\n')
 
       - name: Create GitHub Release
@@ -71,4 +94,3 @@ jobs:
           name: Copyleft ${{ github.ref_name }}
           body_path: release_notes.md
           files: Copyleft-*-windows-x64.zip
-          generate_release_notes: true

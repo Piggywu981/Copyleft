@@ -97,3 +97,29 @@ ceil 命中全部 8 个数字，round 只中 5 个、floor 只中 2 个。图内
    **经伙伴决定：两边都修，让勾选生效**——Python 侧 `get_attribute_str` 里 Param 走实时计算。
    影响：新版输出在等效焦距开启时与旧版 Release 不同（多数机型 50mm 会变成 75mm 这类实际差异），
    发布说明要写明；规格 § 1「不改水印文案规则」这条非目标为此开了例外。
+
+## 发布路线决定（2026-10-13，v3.0.0）
+
+**决定**：`release.yml` 从 PyInstaller 切成 `cargo build --release -p copyleft-gui`，
+Python 版停止打包发布。我提过一件事：计划 A 只交付了引擎地基，GUI 是空窗口，
+布局与保存在计划 B/C，所以现在切发布 = 出一个「能跑但不能处理图片」的 exe。
+伙伴仍然选择直接切换，按此执行一轮，风险与退出条件记在下面，不再劝第二轮。
+
+**已落地的缓解**：README 顶部、下载小节、以及自动生成的 Release 正文都写明功能范围，
+并指引需要完整功能的用户下载 v2.6.0。
+
+**退出条件（满足任一即回到正常轨道）**：
+1. 计划 B 完成（`imageops` + 布局处理器 + EXIF 写出 + 整图对拍）后产物才真正处理图片；
+   计划 C 完成（GUI + 并发 + 首启资源释放 + exiftool 自动下载）后才与 v2.6.0 功能等价。
+2. 若在那之前不想让公众拿到空壳：把 `release.yml` 里 `Create GitHub Release` 的
+   `if: startsWith(github.ref, 'refs/tags/v')` 改成 `if: false`，流水线就退化成
+   「只跑 fmt/clippy/test 门禁、不出 Release」，其它步骤不用改。
+3. 想整条回退发布通道：Build/Package 两步换回 PyInstaller 即可，其余不动。
+
+**版本对齐**：`rust/Cargo.toml`、`main.py`（`setApplicationVersion` 与页脚原本写死的 `v2.5`）、
+`README.md` 三处统一到 3.0.0。页脚将来应由 Rust 侧 `env!("CARGO_PKG_VERSION")` 生成，
+免得再出现 README 到 2.6.0、界面还写 2.5 的情况。
+
+**CI 依赖样张的处理**：`input/` 与 `rust/fixtures/` 都被 .gitignore 排除，runner 上不存在。
+13 个依赖样张的测试改用 `require_samples!()` 宏在缺样张时跳过并打印原因，
+CI 因此跑的是不含样张的那部分；本地有样张时 36 个全跑（两种场景都已实测 0 失败）。

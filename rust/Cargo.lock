@@ -521,7 +521,7 @@ dependencies = [
 
 [[package]]
 name = "copyleft-cli"
-version = "2.6.0"
+version = "3.0.0"
 dependencies = [
  "clap",
  "copyleft-core",
@@ -530,7 +530,7 @@ dependencies = [
 
 [[package]]
 name = "copyleft-core"
-version = "2.6.0"
+version = "3.0.0"
 dependencies = [
  "chrono",
  "image",
@@ -549,7 +549,7 @@ dependencies = [
 
 [[package]]
 name = "copyleft-gui"
-version = "2.6.0"
+version = "3.0.0"
 dependencies = [
  "copyleft-core",
  "eframe",

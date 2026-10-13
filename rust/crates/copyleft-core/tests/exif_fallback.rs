@@ -24,6 +24,7 @@ impl ExifTool for FakeTool {
 
 #[test]
 fn prefers_exiftool_when_available() {
+    copyleft_core::require_samples!();
     let f = read_with(&photo("_DSC7969.JPG"), &FakeTool(Some(PathBuf::from("x")))).unwrap();
     assert_eq!(f.model, "FAKE MODEL");
     assert_eq!(f.source, ExifSource::Exiftool);
@@ -31,6 +32,7 @@ fn prefers_exiftool_when_available() {
 
 #[test]
 fn falls_back_to_standard_on_error() {
+    copyleft_core::require_samples!();
     let f = read_with(&photo("_DSC7969.JPG"), &FakeTool(None)).unwrap();
     assert_eq!(f.source, ExifSource::Standard);
     assert_eq!(f.model, "NIKON D810");
@@ -40,6 +42,7 @@ fn falls_back_to_standard_on_error() {
 
 #[test]
 fn no_exif_anywhere_is_not_an_error() {
+    copyleft_core::require_samples!();
     let f = read_with(&fixture("no_exif.png"), &FakeTool(None)).unwrap();
     assert_eq!(f.source, ExifSource::Standard);
     assert_eq!(f, ExifFacts::empty(ExifSource::Standard));
@@ -47,6 +50,7 @@ fn no_exif_anywhere_is_not_an_error() {
 
 #[test]
 fn real_orchestration_agrees_with_python_ground_truth() {
+    copyleft_core::require_samples!();
     use copyleft_core::exif::{tool, ExiftoolBinary};
     // 仓库根才有 exiftool.exe，而集成测试的 CWD 是 crate 目录，
     // 所以显式按仓库根探测，走的仍是 locate_from 的真实实现。
