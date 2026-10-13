@@ -1,15 +1,19 @@
 """打印 Python 版的 16 个文字项，供与 copyleft-cli meta 逐行 diff。
 
-用法：python rust/tests/exif_parity.py <photo> [--eq]
-必须在仓库根运行（依赖 ./config.yaml、./fonts、可选的 ./exiftool.exe）。
+用法：
+  PY_ROOT=/path/to/legacy-python-检出 python rust/tests/exif_parity.py <photo> [--eq]
+不带 PY_ROOT 时假定 Python 实现就在本检出里（在 legacy-python 分支上直接跑的情形）。
 
 输出格式与 Rust 侧刻意保持一致：裸值 + tab，不加任何一方的 repr，
 否则每一行都会因为引号风格不同而 diff 失败。
 """
+import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+PY_ROOT = os.environ.get("PY_ROOT") or str(Path(__file__).resolve().parents[2])
+sys.path.insert(0, PY_ROOT)
+os.chdir(PY_ROOT)  # config.yaml / exiftool.exe 都按相对路径找
 
 import utils  # noqa: E402
 from core.entity.config import ElementConfig  # noqa: E402

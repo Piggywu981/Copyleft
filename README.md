@@ -34,33 +34,33 @@
 ---
 ## 系统要求
 
-- **操作系统**：Windows 7/8/10/11
-- **Python版本**：Python 3.10+
-- **依赖包**：详见`requirements.txt`
+- **操作系统**：Windows 10/11 x64（Linux/macOS 能编译，暂不发布产物）
+- **构建**：Rust stable + 平台的 C 链接器（Windows 上是 VS 2022 Build Tools 的 MSVC）。
+  `eframe` 钉在 0.35，因为 0.36.2 起要求 rustc 1.95。
+- **运行**：无运行时依赖，单文件 exe，不附带 DLL。
 ---
 ## 安装说明
 
-### 1. 安装Python依赖
+本仓库 `main` 是 Rust 实现线。从源码构建见下一节「用 Rust 从源码构建」；
+普通使用直接去 Releases 下载 zip。
+
+### （可选）安装 exiftool
+Rust 侧读取是双通道：探测到 exiftool 就优先用它（能读到 MakerNotes 里的镜头型号、ISO），
+没有则回退内置的 `kamadak-exif`——相机型号、拍摄参数、日期这些照常显示。
+查找顺序是 `PATH`，然后是可执行文件所在目录及当前目录下的 `exiftool.exe`、`exiftool/exiftool.exe`。
+部分单反（如 Nikon D810）把 ISO 和镜头信息放在 Makernotes，若要完整读取，从
+[exiftool 官网](https://exiftool.org/)下载后把 `exiftool(-k).exe` 改名成 `exiftool.exe`
+放到 exe 同目录即可。启动时询问并自动下载的逻辑排在计划 C。
+
+### Python 版（遗留线）
+PyQt5 的实现整体挪到了 **`legacy-python`** 分支，那边保留可运行的 Python 版
+（含 EXIF tag 与等效焦距两处修复）和原来的 PyInstaller 发布流程。要跑 Python 版：
+
 ```bash
+git checkout legacy-python
 pip install -r requirements.txt
-```
-
-### 2. （可选）安装 exiftool
-程序内置基于 Pillow 的 EXIF 读取，**不安装也能正常显示相机型号、拍摄参数、日期等信息**。
-程序启动时会自动检测，若未检测到 exiftool 会询问是否自动下载（仅 Windows）。
-部分单反（如 Nikon D810）将 ISO 和镜头信息存放在 Makernotes 中，若需完整读取这些字段，可从[exiftool官网](https://exiftool.org/)下载：
-- 将解压后的`exiftool(-k).exe`文件复制到项目根目录下
-- 将"exiftool(-k).exe"重命名为"exiftool.exe"
-
-### 3. 运行程序
-```bash
 python main.py
 ```
-
-### 注意事项
-- 需要 Python 3.10+ 版本（代码使用了 `dict | None` 等新语法）
-- 如遇到QFluentWidgets安装问题，可以尝试：`pip install PyQt-Fluent-Widgets`
-- 确保系统已安装Microsoft Visual C++ Redistributable
 
 ## 下载 exe 版本
 在 [Releases](https://github.com/Piggywu981/Copyleft/releases) 页面下载 `Copyleft-<版本>-windows-x64.zip`，解压后双击 `Copyleft.exe` 即可运行，无需安装 Python 或 Rust 运行时（单文件，不附带 DLL）。
@@ -190,44 +190,78 @@ cargo run -p copyleft-cli -- meta ../input/_DSC7969.JPG
 ---
 ## 技术架构
 
-### 核心模块
-- **core/entity**：实体类定义（图片容器、处理器链等）
-- **core/enums**：枚举常量定义
-- **main.py**：PyQt5主窗口界面与处理线程
-- **utils**：工具函数
+### crate 划分
+- **`copyleft-core`**：引擎库，零 GUI 依赖。`config`（config.yaml 读写）、`exif`（双通道）、
+  `meta`（EXIF → 16 个文字项）、`text`（文字栅格化）、`imageops` 与 `layout`（计划 B）
+- **`copyleft-cli`**：`meta` / `text` 两个观测命令，也是与 Python 版逐行对拍的入口
+- **`copyleft-gui`**：eframe/egui 外壳（计划 C；当前是能编译运行的空窗口壳）
 
-### 处理器链设计
-采用责任链模式，支持灵活添加各种图片处理器：
-- 阴影处理器
-- 水印处理器
-- 白边处理器
-- 比例填充处理器
+### EXIF 双通道
+优先调用 exiftool（`-j` 结构化输出，能读 MakerNotes 里的镜头与 ISO），失败或缺失时回退
+`kamadak-exif`。两条通道都归一化到同一个 `ExifFacts`，字段存的是「显示就绪」的字符串而不是
+数值——因为两条通道给同一条信息的形态不同（exiftool 打 `145 mm`、内置解析格式化成 `145.0 mm`），
+而对拍要求两边逐字一致。
 
-### 多线程处理
-使用QThread实现后台图片处理，确保界面响应性。
+### 文字渲染
+`rustybuzz` shaping + `skrifa` 取轮廓 + `tiny-skia` 填充，走的是能处理 CFF（`.otf`，本项目
+的中文字体就是 `OTTO`）轮廓的路径。位图尺寸按 Pillow `getbbox` 的语义算：宽 = 推进量，
+高 = max(ascender, 墨迹下沿)，基线在 `y = ascender`；ascender/descender 的取整规则以 Pillow
+`getmetrics()` 实测值（255/82、276/89、223/59、242/64）为验收线，结论是 ceil。
+
+### 处理器链与并发（计划 B、C）
+责任链装配规则与 5 线程批处理在计划 B/C 落地。设计上把配置在「开始处理」时冻结成不可变
+`RenderPlan`，worker 只读它——Python 版靠人肉纪律避免工作线程跨线程写配置，Rust 版让它在类型层面不成立。
 ---
 ## 开发说明
 
 ### 项目结构
 ```
 Copyleft/
-├── core/                 # 核心模块
-│   ├── entity/          # 实体类（图片容器、处理器链、配置管理等）
-│   └── enums/           # 枚举常量
-├── fonts/               # 字体资源文件
-├── logos/               # Logo图片资源
-├── assets/              # 界面用图片资源（打赏二维码等）
-├── config.yaml          # 主配置文件
-├── main.py              # 程序入口点（整合了PyQt5主窗口界面）
-├── init.py              # 初始化配置、布局与处理器注册
-├── utils.py             # 工具函数库
-└── requirements.txt     # Python依赖包列表
+├── rust/
+│   ├── Cargo.toml                # workspace
+│   ├── NOTES.md                  # 体积基线、字体选型、与计划的偏差、对拍结果
+│   ├── crates/
+│   │   ├── copyleft-core/        # 引擎库（config / exif / meta / text / imageops / layout）
+│   │   ├── copyleft-cli/         # meta、text 子命令
+│   │   └── copyleft-gui/         # eframe 外壳
+│   ├── fixtures/make.sh          # 从 input/ 派生测试样张
+│   └── tests/                    # parity.sh + exif_parity.py 对拍
+├── fonts/                        # 水印字体（含 CFF 的 .otf 中文字体）
+├── logos/                        # 相机厂商 Logo
+├── assets/                       # 界面图片（鸣谢页）
+├── config.yaml                   # 主配置（Python 与 Rust 共用同一份 schema）
+└── docs/superpowers/             # 设计规格与分阶段实现计划
+```
+Python 实现不在 `main`，在 **`legacy-python`** 分支。
+
+### 常用命令
+```bash
+cd rust
+cargo test                                     # 单测与集成测试
+cargo clippy --all-targets -- -D warnings      # CI 的门禁之一
+cargo run -p copyleft-cli -- meta ../input/_DSC7969.JPG
+bash rust/tests/parity.sh                      # 与 Python 版逐行对拍
 ```
 
+### 对拍闸门怎么跑
+`parity.sh` 需要 Python 实现作为基准，而 `main` 上已经没有它。开一份 `legacy-python`
+的 worktree 指过去即可（已实测 5 张样张 × 2 种焦距模式全部逐行一致）：
+
+```bash
+git worktree add ../legacy-python legacy-python
+PY_ROOT=../legacy-python bash rust/tests/parity.sh          # exiftool 通道
+bash rust/tests/parity.sh                                    # 没有 exiftool 时两边同走内置解析
+git worktree remove ../legacy-python
+```
+脚本会把 exiftool 二进制所在目录塞进 Python 那次调用的 `PATH`——否则 Rust 走 exiftool、
+Python 走内置解析，比的是两条不同通道，DIFF 会是假警报。
+
 ### 扩展开发
-- 添加新的布局类型：在`init.py`中定义新的LayoutItem
-- 添加新的处理器：继承`ImageProcessor`基类
-- 修改界面：编辑`main.py`中的`MainWindow`类
+- 加布局：在 `copyleft-core/src/layout/` 实现 `Processor`，并在 `keys::LayoutId` 注册——
+  id 字符串必须与 `config.yaml` 里 `layout.type` 的取值一致
+- 加文字项：加 `TextKey` 变体、`as_str()`（要与 Python 侧 `constant.py` 的 `*_VALUE` 逐字一致）、
+  `display_name()`、`ImageMeta::text()` 分支，并补对拍断言
+- 改界面：`copyleft-gui`（计划 C）
 ---
 ## 许可证
 
