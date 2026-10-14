@@ -1,8 +1,6 @@
 .idea
 .DS_Store
 release
-input
-output
 __pycache__
 logos/logo_psds
 exiftool
